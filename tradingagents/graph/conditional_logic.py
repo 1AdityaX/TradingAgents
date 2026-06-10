@@ -71,3 +71,15 @@ class ConditionalLogic:
         if state["risk_debate_state"]["latest_speaker"].startswith("Conservative"):
             return "Neutral Analyst"
         return "Aggressive Analyst"
+
+    def should_continue_after_validation(self, state: AgentState) -> str:
+        """Route after the Signal Validator runs.
+
+        Returns:
+            "Aggressive Analyst" — signal is valid (or forced NO_TRADE); proceed.
+            "Trader"             — signal failed validation; retry (once only).
+        """
+        result = state.get("signal_validation_result") or {}
+        if result.get("valid", True):
+            return "Aggressive Analyst"
+        return "Trader"

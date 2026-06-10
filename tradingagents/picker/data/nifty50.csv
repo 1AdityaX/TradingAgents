@@ -1,0 +1,51 @@
+symbol,name,sector
+ADANIENT.NS,Adani Enterprises,Industrials
+ADANIPORTS.NS,Adani Ports & Special Economic Zone,Industrials
+APOLLOHOSP.NS,Apollo Hospitals Enterprise,Healthcare
+ASIANPAINT.NS,Asian Paints,Consumer Discretionary
+AXISBANK.NS,Axis Bank,Financial Services
+BAJAJ-AUTO.NS,Bajaj Auto,Automobiles
+BAJFINANCE.NS,Bajaj Finance,Financial Services
+BAJAJFINSV.NS,Bajaj Finserv,Financial Services
+BPCL.NS,Bharat Petroleum Corporation,Energy
+BHARTIARTL.NS,Bharti Airtel,Telecom
+BRITANNIA.NS,Britannia Industries,Consumer Staples
+CIPLA.NS,Cipla,Healthcare
+COALINDIA.NS,Coal India,Energy
+DIVISLAB.NS,Divi's Laboratories,Healthcare
+DRREDDY.NS,Dr. Reddy's Laboratories,Healthcare
+EICHERMOT.NS,Eicher Motors,Automobiles
+GRASIM.NS,Grasim Industries,Materials
+HCLTECH.NS,HCL Technologies,Information Technology
+HDFCBANK.NS,HDFC Bank,Financial Services
+HDFCLIFE.NS,HDFC Life Insurance,Financial Services
+HEROMOTOCO.NS,Hero MotoCorp,Automobiles
+HINDALCO.NS,Hindalco Industries,Materials
+HINDUNILVR.NS,Hindustan Unilever,Consumer Staples
+ICICIBANK.NS,ICICI Bank,Financial Services
+INDUSINDBK.NS,IndusInd Bank,Financial Services
+INFY.NS,Infosys,Information Technology
+ITC.NS,ITC,Consumer Staples
+JSWSTEEL.NS,JSW Steel,Materials
+KOTAKBANK.NS,Kotak Mahindra Bank,Financial Services
+LT.NS,Larsen & Toubro,Industrials
+LTIM.NS,LTIMindtree,Information Technology
+M&M.NS,Mahindra & Mahindra,Automobiles
+MARUTI.NS,Maruti Suzuki India,Automobiles
+NESTLEIND.NS,Nestle India,Consumer Staples
+NTPC.NS,NTPC,Utilities
+ONGC.NS,Oil and Natural Gas Corporation,Energy
+POWERGRID.NS,Power Grid Corporation of India,Utilities
+RELIANCE.NS,Reliance Industries,Energy
+SBIN.NS,State Bank of India,Financial Services
+SBILIFE.NS,SBI Life Insurance,Financial Services
+SHREECEM.NS,Shree Cement,Materials
+SUNPHARMA.NS,Sun Pharmaceutical Industries,Healthcare
+TATACONSUM.NS,Tata Consumer Products,Consumer Staples
+TATAMOTORS.NS,Tata Motors,Automobiles
+TATASTEEL.NS,Tata Steel,Materials
+TCS.NS,Tata Consultancy Services,Information Technology
+TECHM.NS,Tech Mahindra,Information Technology
+TITAN.NS,Titan Company,Consumer Discretionary
+ULTRACEMCO.NS,UltraTech Cement,Materials
+WIPRO.NS,Wipro,Information Technology

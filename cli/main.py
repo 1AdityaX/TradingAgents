@@ -1285,6 +1285,347 @@ def run_analysis(checkpoint: bool = False):
         display_complete_report(final_state)
 
 
+def _run_scan(
+    universe: str,
+    top: int,
+    run_analysis_flag: bool,
+    min_liquidity_cr: float,
+    llm_provider: Optional[str],
+    backend_url: Optional[str],
+):
+    """Core scan logic: screen → rank → optionally run full analysis."""
+    from tradingagents.picker.screener import run_screen
+    from tradingagents.picker.candidate import build_all_cards
+    from tradingagents.picker.picker_agent import run_picker, render_picker_output
+    from tradingagents.picker.universe import list_universes
+
+    # ── 1. Validate universe ─────────────────────────────────────────────
+    valid = list_universes()
+    if universe not in valid:
+        console.print(f"[red]Unknown universe '{universe}'. Valid: {', '.join(valid)}[/red]")
+        raise typer.Exit(code=1)
+
+    # ── 2. Quantitative screen ────────────────────────────────────────────
+    universe_label = "DYNAMIC (NSE EQ-series)" if universe == "dynamic" else universe.upper()
+    console.print(f"\n[bold cyan]Running quantitative screen — {universe_label}...[/bold cyan]")
+    console.print(f"[dim]Filters: price ≥ ₹{DEFAULT_CONFIG['min_stock_price']}, "
+                  f"liquidity ≥ ₹{min_liquidity_cr:.0f}Cr, not in F&O ban[/dim]")
+    if universe == "dynamic":
+        console.print(
+            "[dim]Dynamic universe: auto-rebuilds from NSE when cache is older than "
+            f"{DEFAULT_CONFIG.get('universe_max_age_days', 7)} days.[/dim]"
+        )
+
+    status_msg = (
+        "[cyan]Loading dynamic universe + scoring (batched yfinance — may take 1–2 min on first run)...[/cyan]"
+        if universe == "dynamic"
+        else "[cyan]Downloading universe data (batched yfinance — may take ~30s)...[/cyan]"
+    )
+    with console.status(status_msg):
+        scores = run_screen(
+            universe=universe,
+            max_candidates=25,
+            min_liquidity_cr=min_liquidity_cr,
+        )
+
+    if not scores:
+        console.print("[yellow]No stocks passed the screen. Try relaxing filters or a larger universe.[/yellow]")
+        raise typer.Exit(code=0)
+
+    # ── 3. Display screen results table ─────────────────────────────────
+    screen_table = Table(
+        title=f"Screen Results — {universe.upper()} — top {len(scores)} of universe",
+        box=box.SIMPLE_HEAD,
+        show_footer=False,
+        header_style="bold magenta",
+    )
+    screen_table.add_column("Rank", width=4, justify="right")
+    screen_table.add_column("Symbol", width=14)
+    screen_table.add_column("Name", width=24)
+    screen_table.add_column("Sector", width=18)
+    screen_table.add_column("Price ₹", width=9, justify="right")
+    screen_table.add_column("RSI", width=5, justify="right")
+    screen_table.add_column("RS 1m%", width=8, justify="right")
+    screen_table.add_column("VolSurge", width=9, justify="right")
+    screen_table.add_column("DistHi%", width=8, justify="right")
+    screen_table.add_column("Score", width=7, justify="right")
+
+    for i, sc in enumerate(scores, 1):
+        rs_color = "green" if sc.rel_strength_1m > 0 else "red"
+        screen_table.add_row(
+            str(i),
+            sc.symbol,
+            sc.name[:22],
+            sc.sector[:16],
+            f"{sc.price:,.0f}",
+            f"{sc.rsi14:.0f}",
+            f"[{rs_color}]{sc.rel_strength_1m:+.1f}%[/{rs_color}]",
+            f"{sc.vol_surge_ratio:.1f}x",
+            f"{sc.dist_from_high_pct:.1f}%",
+            f"{sc.composite_score:.3f}",
+        )
+
+    console.print(screen_table)
+
+    # ── 4. Build candidate cards ─────────────────────────────────────────
+    console.print(f"\n[cyan]Building candidate cards (results dates, pledge data, headlines)...[/cyan]")
+    with console.status("[cyan]Enriching candidate data...[/cyan]"):
+        cards = build_all_cards(scores)
+
+    # ── 5. LLM ranking ──────────────────────────────────────────────────
+    console.print(f"\n[bold cyan]Running LLM picker (1 call — {DEFAULT_CONFIG['quick_think_llm']})...[/bold cyan]")
+
+    llm = None
+    if llm_provider:
+        try:
+            from tradingagents.llm_clients import create_llm_client
+            llm = create_llm_client(
+                provider=llm_provider,
+                model=DEFAULT_CONFIG["quick_think_llm"],
+                backend_url=backend_url,
+                temperature=DEFAULT_CONFIG.get("temperature"),
+            )
+        except Exception as exc:
+            console.print(f"[yellow]LLM init warning: {exc} — using default config[/yellow]")
+
+    with console.status("[cyan]Picker agent ranking candidates...[/cyan]"):
+        picker_result = run_picker(cards=cards, top_n=top, llm=llm)
+
+    # ── 6. Display picker results ────────────────────────────────────────
+    console.print()
+    console.print(Rule("Stock Picker Results", style="bold green"))
+    console.print(Panel(
+        Markdown(render_picker_output(picker_result)),
+        title=f"Top {top} Picks from {universe.upper()}",
+        border_style="green",
+        padding=(1, 2),
+    ))
+
+    # Print a compact action table
+    picks_table = Table(
+        title="Action Table",
+        box=box.SIMPLE_HEAD,
+        header_style="bold cyan",
+    )
+    picks_table.add_column("Rank", width=5, justify="right")
+    picks_table.add_column("Ticker", width=14)
+    picks_table.add_column("Setup Hypothesis", width=40)
+    picks_table.add_column("Confidence", width=10)
+    picks_table.add_column("Run Analysis?", width=13, justify="center")
+
+    for sel in picker_result.top_picks:
+        conf_color = {"high": "green", "medium": "yellow", "low": "dim"}.get(sel.confidence, "white")
+        picks_table.add_row(
+            str(sel.rank),
+            sel.ticker,
+            sel.setup_hypothesis[:38],
+            f"[{conf_color}]{sel.confidence}[/{conf_color}]",
+            "✓" if run_analysis_flag else "-",
+        )
+    console.print(picks_table)
+
+    # ── 7. Optional full pipeline run ────────────────────────────────────
+    if not run_analysis_flag:
+        console.print(
+            "\n[dim]Tip: add --run-analysis to pipe each pick through the full analysis pipeline.[/dim]"
+        )
+        return
+
+    # Scan-gate check: warn if open risk is saturated (best-effort)
+    console.print()
+    console.print(Rule("Running Full Analysis on Each Pick", style="bold yellow"))
+
+    tickers_to_run = [sel.ticker for sel in picker_result.top_picks]
+    analysis_date = datetime.datetime.now().strftime("%Y-%m-%d")
+
+    for ticker in tickers_to_run:
+        console.print(f"\n[bold cyan]━━ Analyzing {ticker} ━━[/bold cyan]")
+
+        # Reuse the full run_analysis flow with a minimal config
+        config = DEFAULT_CONFIG.copy()
+        if llm_provider:
+            config["llm_provider"] = llm_provider
+        if backend_url:
+            config["backend_url"] = backend_url
+
+        try:
+            from tradingagents.graph.trading_graph import TradingAgentsGraph
+            from tradingagents.graph.analyst_execution import (
+                build_analyst_execution_plan,
+                get_initial_analyst_node,
+            )
+            from tradingagents.dataflows.symbol_utils import detect_asset_type as _detect
+
+            analyst_keys = ["market", "news", "fundamentals"]
+            plan = build_analyst_execution_plan(analyst_keys, concurrency_limit=1)
+            graph = TradingAgentsGraph(analyst_keys, config=config, debug=False)
+
+            instrument_context = graph.resolve_instrument_context(ticker, "stock")
+            init_state = graph.propagator.create_initial_state(
+                ticker, analysis_date,
+                asset_type="stock",
+                instrument_context=instrument_context,
+            )
+            args = graph.propagator.get_graph_args()
+
+            final_state: dict = {}
+            with console.status(f"[cyan]Analysis running for {ticker}...[/cyan]"):
+                for chunk in graph.graph.stream(init_state, **args):
+                    final_state.update(chunk)
+
+            decision = graph.process_signal(final_state.get("final_trade_decision", ""))
+            console.print(Panel(
+                Markdown(final_state.get("final_trade_decision", "No decision")),
+                title=f"{ticker} — Final Decision",
+                border_style="blue",
+                padding=(1, 2),
+            ))
+        except Exception as exc:
+            console.print(f"[red]Analysis failed for {ticker}: {exc}[/red]")
+
+
+@app.command()
+def scan(
+    universe: str = typer.Option(
+        "dynamic",
+        "--universe", "-u",
+        help=(
+            "Stock universe to scan. "
+            "'dynamic' (default) auto-builds from NSE EQUITY_L.csv (~400–600 liquid EQ stocks). "
+            "Static overrides: nifty50, nifty_next50, nifty200, midcap150, nifty500."
+        ),
+    ),
+    top: int = typer.Option(
+        5,
+        "--top", "-n",
+        help="Number of top picks to select (1–5).",
+    ),
+    run_analysis: bool = typer.Option(
+        False,
+        "--run-analysis",
+        help="After picking, run the full analysis pipeline on each pick sequentially.",
+    ),
+    min_liquidity: float = typer.Option(
+        10.0,
+        "--min-liquidity",
+        help="Minimum 20-day median traded value in crores (₹ Cr). Default 10.",
+    ),
+    llm_provider: Optional[str] = typer.Option(
+        None,
+        "--llm-provider",
+        help="LLM provider for the picker agent (openai, anthropic, google, etc.). "
+             "Defaults to TRADINGAGENTS_LLM_PROVIDER env var or config.",
+    ),
+    backend_url: Optional[str] = typer.Option(
+        None,
+        "--backend-url",
+        help="Optional backend URL override for the LLM provider.",
+    ),
+):
+    """Scan a stock universe, rank with AI, and optionally run full analysis on top picks.
+
+    Examples:
+        python -m cli.main scan                            # dynamic universe, top 5
+        python -m cli.main scan --universe nifty200 --top 3
+        python -m cli.main scan --top 3 --run-analysis
+    """
+    # Display scan header
+    console.print(Panel(
+        "[bold green]TradingAgents — Stock Universe Scanner[/bold green]\n"
+        "[dim]Phase 3: Quantitative screen → LLM ranking → top-N picks[/dim]",
+        border_style="green",
+        padding=(1, 2),
+    ))
+
+    # Resolve LLM provider from arg or environment
+    effective_provider = llm_provider or DEFAULT_CONFIG.get("llm_provider", "openai")
+    effective_backend = backend_url or DEFAULT_CONFIG.get("backend_url")
+
+    # Ensure API key is present when using an interactive session
+    if not os.environ.get("TRADINGAGENTS_LLM_PROVIDER"):
+        try:
+            from cli.utils import ensure_api_key
+            ensure_api_key(effective_provider)
+        except Exception:
+            pass  # non-interactive mode; key assumed to be in env
+
+    # Clamp top to [1, 5]
+    top = max(1, min(5, top))
+
+    _run_scan(
+        universe=universe,
+        top=top,
+        run_analysis_flag=run_analysis,
+        min_liquidity_cr=min_liquidity,
+        llm_provider=effective_provider,
+        backend_url=effective_backend,
+    )
+
+
+@app.command()
+def universe(
+    action: str = typer.Argument(
+        "show",
+        help="Action: 'refresh' to force-rebuild the dynamic universe, 'show' to inspect it.",
+    ),
+):
+    """Manage the dynamic stock universe cache.
+
+    Examples:
+        python -m cli.main universe show      # show current cached universe metadata
+        python -m cli.main universe refresh   # force-rebuild from NSE EQUITY_L.csv
+    """
+    from tradingagents.picker.universe import (
+        universe_info,
+        rebuild_universe,
+        NSEUnavailableError,
+        _load_cache,
+    )
+
+    if action == "show":
+        info = universe_info()
+        status_color = "green" if info["status"] == "fresh" else ("yellow" if info["status"] == "stale" else "red")
+        console.print(Panel(
+            f"[bold]Dynamic Universe Status[/bold]\n"
+            f"Status:    [{status_color}]{info['status']}[/{status_color}]\n"
+            f"Count:     {info['count']} stocks\n"
+            f"Built on:  {info['built_on'] or 'not built yet'}\n"
+            f"Age:       {info.get('age_days', 'N/A')} days (max {info.get('max_age_days', 7)})\n"
+            f"Cache:     {info['cache_path']}",
+            title="Universe Cache",
+            border_style="cyan",
+        ))
+        cache = _load_cache()
+        if cache and cache.stocks:
+            tbl = Table(box=box.SIMPLE_HEAD, header_style="bold cyan", show_footer=False)
+            tbl.add_column("Symbol", width=16)
+            tbl.add_column("Name", width=30)
+            tbl.add_column("Sector", width=20)
+            for s in cache.stocks[:30]:
+                tbl.add_row(s.symbol, s.name[:28], s.sector)
+            if len(cache.stocks) > 30:
+                tbl.add_row("...", f"...and {len(cache.stocks) - 30} more", "")
+            console.print(tbl)
+
+    elif action == "refresh":
+        console.print("[bold cyan]Rebuilding dynamic universe from NSE EQUITY_L.csv...[/bold cyan]")
+        console.print("[dim]This downloads ~2,000 NSE-listed stocks and applies eligibility filters.")
+        console.print("[dim]May take 3–5 minutes on first run (batched yfinance downloads).[/dim]")
+        try:
+            with console.status("[cyan]Downloading and filtering...[/cyan]"):
+                cache = rebuild_universe(DEFAULT_CONFIG)
+            console.print(
+                f"[green]Done — {len(cache.stocks)} stocks cached (built {cache.built_on})[/green]"
+            )
+        except NSEUnavailableError as exc:
+            console.print(f"[red]NSE unavailable: {exc}[/red]")
+            console.print("[yellow]Try again later or use --universe nifty200 as a fallback.[/yellow]")
+            raise typer.Exit(code=1)
+    else:
+        console.print(f"[red]Unknown action '{action}'. Use 'show' or 'refresh'.[/red]")
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def analyze(
     checkpoint: bool = typer.Option(
@@ -1303,6 +1644,423 @@ def analyze(
         n = clear_all_checkpoints(DEFAULT_CONFIG["data_cache_dir"])
         console.print(f"[yellow]Cleared {n} checkpoint(s).[/yellow]")
     run_analysis(checkpoint=checkpoint)
+
+
+# ---------------------------------------------------------------------------
+# positions sub-commands (Phase 4 — position store & management mode)
+# ---------------------------------------------------------------------------
+
+positions_app = typer.Typer(
+    name="positions",
+    help="Manage open swing-trade positions and run position reviews.",
+    no_args_is_help=True,
+)
+app.add_typer(positions_app, name="positions")
+
+
+def _get_store():
+    from tradingagents.portfolio.store import PositionStore
+    return PositionStore()
+
+
+def _print_positions_table(positions: list[dict], title: str = "Positions") -> None:
+    """Render a compact positions table to the console."""
+    tbl = Table(
+        title=title,
+        box=box.SIMPLE_HEAD,
+        header_style="bold magenta",
+        show_footer=False,
+    )
+    tbl.add_column("ID", width=4, justify="right")
+    tbl.add_column("Ticker", width=12)
+    tbl.add_column("Dir", width=6)
+    tbl.add_column("Status", width=7)
+    tbl.add_column("Opened", width=11)
+    tbl.add_column("Avg Entry ₹", width=12, justify="right")
+    tbl.add_column("Qty", width=6, justify="right")
+    tbl.add_column("SL ₹", width=10, justify="right")
+    tbl.add_column("Last Review", width=12)
+    tbl.add_column("R (closed)", width=10, justify="right")
+
+    for pos in positions:
+        status = pos.get("status", "")
+        status_color = "green" if status == "OPEN" else "dim"
+        avg_entry = pos.get("avg_entry")
+        sl = pos.get("stop_loss")
+        r_val = pos.get("realized_r")
+
+        tbl.add_row(
+            str(pos.get("id", "")),
+            pos.get("ticker", ""),
+            pos.get("direction", ""),
+            f"[{status_color}]{status}[/{status_color}]",
+            pos.get("opened_date", "")[:10],
+            f"{avg_entry:,.0f}" if avg_entry else "—",
+            str(pos.get("qty_open") or "—"),
+            f"{sl:,.0f}" if sl else "—",
+            (pos.get("last_review_date") or "")[:10] or "—",
+            f"{r_val:+.2f}R" if r_val is not None else "—",
+        )
+    console.print(tbl)
+
+
+@positions_app.command("list")
+def positions_list(
+    status: str = typer.Option(
+        "open",
+        "--status", "-s",
+        help="Filter by status: open, closed, all.",
+    ),
+):
+    """List all positions."""
+    store = _get_store()
+    filter_status = None if status.lower() == "all" else status.upper()
+    positions = store.list_positions(status=filter_status)
+    if not positions:
+        console.print(f"[yellow]No {status} positions found.[/yellow]")
+        return
+    _print_positions_table(positions, title=f"{status.upper()} Positions")
+
+
+@positions_app.command("add")
+def positions_add(
+    ticker: Optional[str] = typer.Option(None, "--ticker", "-t", help="Ticker symbol (e.g. RELIANCE.NS)."),
+    direction: Optional[str] = typer.Option(None, "--direction", "-d", help="LONG or SHORT."),
+    from_last_signal: bool = typer.Option(False, "--from-last-signal", help="Log last signal from most recent run."),
+):
+    """Add a new position to the store.
+
+    Use --from-last-signal to log the signal from the most recent analysis run,
+    or provide --ticker and --direction for interactive entry.
+    """
+    store = _get_store()
+
+    if from_last_signal:
+        # Try to find the most recent signal file
+        import json as _json
+        results_dir = Path(DEFAULT_CONFIG["results_dir"])
+        signal_files = sorted(results_dir.rglob("full_states_log_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not signal_files:
+            console.print("[red]No recent analysis runs found. Run 'analyze' or 'scan --run-analysis' first.[/red]")
+            raise typer.Exit(code=1)
+        latest = signal_files[0]
+        try:
+            state = _json.loads(latest.read_text(encoding="utf-8"))
+        except Exception as exc:
+            console.print(f"[red]Could not read signal file: {exc}[/red]")
+            raise typer.Exit(code=1)
+
+        ticker_from_state = state.get("company_of_interest", "")
+        trade_signal = state.get("trade_signal") or {}
+        direction_from_signal = (trade_signal.get("direction") or "").upper()
+
+        if direction_from_signal == "NO_TRADE" or not direction_from_signal:
+            console.print(f"[yellow]Last signal for {ticker_from_state} was NO_TRADE. Nothing to add.[/yellow]")
+            raise typer.Exit(code=0)
+
+        console.print(Panel(
+            f"[bold]Ticker:[/bold] {ticker_from_state}\n"
+            f"[bold]Direction:[/bold] {direction_from_signal}\n"
+            f"[bold]Setup:[/bold] {trade_signal.get('setup_type', '')}\n"
+            f"[bold]Stop Loss:[/bold] ₹{trade_signal.get('stop_loss', 'N/A')}\n"
+            f"[bold]Signal source:[/bold] {latest.name}",
+            title="Last Signal",
+            border_style="cyan",
+        ))
+        confirm = typer.confirm("Log this position?", default=True)
+        if not confirm:
+            raise typer.Exit(code=0)
+
+        pos_id = store.add_position(
+            ticker=ticker_from_state,
+            direction=direction_from_signal,
+            signal=trade_signal,
+            notes="Added from last analysis run",
+        )
+        console.print(f"\n[green]✓ Position #{pos_id} created.[/green]")
+        console.print("[dim]Run 'positions update --fill {pos_id}' once orders are filled.[/dim]")
+        return
+
+    # Interactive entry
+    ticker = ticker or typer.prompt("Ticker (e.g. RELIANCE.NS)")
+    direction = direction or typer.prompt("Direction (LONG/SHORT)").upper()
+    if direction not in ("LONG", "SHORT"):
+        console.print("[red]Direction must be LONG or SHORT.[/red]")
+        raise typer.Exit(code=1)
+
+    stop_loss_str = typer.prompt("Stop Loss price ₹ (optional, press Enter to skip)", default="")
+    sl = float(stop_loss_str) if stop_loss_str.strip() else None
+    setup_type = typer.prompt("Setup type (e.g. breakout-retest)", default="")
+    notes = typer.prompt("Notes (optional)", default="")
+
+    signal: dict = {"direction": direction, "setup_type": setup_type, "stop_loss": sl, "entries": [], "take_profits": []}
+    pos_id = store.add_position(ticker=ticker, direction=direction, signal=signal, notes=notes)
+    console.print(f"\n[green]✓ Position #{pos_id} created.[/green]")
+
+
+@positions_app.command("update")
+def positions_update(
+    position_id: int = typer.Argument(..., help="Position ID to update."),
+    fill: bool = typer.Option(False, "--fill", help="Record a fill (avg entry price and qty)."),
+    exit_partial: bool = typer.Option(False, "--exit", help="Record a partial exit."),
+    move_sl: bool = typer.Option(False, "--move-sl", help="Move the stop-loss (tighten only)."),
+):
+    """Record a fill, partial exit, or SL move on a position."""
+    store = _get_store()
+    pos = store.get_position(position_id)
+    if pos is None:
+        console.print(f"[red]Position {position_id} not found.[/red]")
+        raise typer.Exit(code=1)
+
+    if fill:
+        avg_entry = float(typer.prompt("Avg entry price ₹"))
+        qty = int(typer.prompt("Quantity filled (shares)"))
+        store.record_fill(position_id, avg_entry=avg_entry, qty=qty)
+        console.print(f"[green]✓ Fill recorded: {qty} shares @ ₹{avg_entry:,.2f}[/green]")
+
+    elif exit_partial:
+        qty_exited = int(typer.prompt("Qty to exit"))
+        exit_price = float(typer.prompt("Exit price ₹"))
+        label = typer.prompt("Label (e.g. TP1)", default="")
+        store.record_partial_exit(position_id, qty_exited=qty_exited, exit_price=exit_price, label=label)
+        console.print(f"[green]✓ Partial exit recorded: {qty_exited} shares @ ₹{exit_price:,.2f}[/green]")
+
+    elif move_sl:
+        current_sl = pos.get("stop_loss")
+        direction = pos.get("direction", "LONG")
+        console.print(f"[dim]Current SL: ₹{current_sl:,.2f} | Direction: {direction}[/dim]")
+        new_sl = float(typer.prompt("New stop-loss price ₹"))
+
+        # Enforce tighten-only rule here too
+        if current_sl is not None:
+            if direction == "LONG" and new_sl <= current_sl:
+                console.print("[red]Error: For a LONG position, new SL must be ABOVE the current SL (tighten only).[/red]")
+                raise typer.Exit(code=1)
+            if direction == "SHORT" and new_sl >= current_sl:
+                console.print("[red]Error: For a SHORT position, new SL must be BELOW the current SL (tighten only).[/red]")
+                raise typer.Exit(code=1)
+
+        store.move_stop_loss(position_id, new_sl)
+        console.print(f"[green]✓ SL moved from ₹{current_sl:,.2f} → ₹{new_sl:,.2f}[/green]")
+
+    else:
+        console.print("[yellow]Specify one of --fill, --exit, or --move-sl.[/yellow]")
+
+
+@positions_app.command("close")
+def positions_close(
+    position_id: int = typer.Argument(..., help="Position ID to close."),
+    price: Optional[float] = typer.Option(None, "--price", help="Final exit price ₹."),
+    date: Optional[str] = typer.Option(None, "--date", help="Close date (YYYY-MM-DD). Defaults to today."),
+):
+    """Close a position and compute realized R-multiple.
+
+    Feeds the realized R into the reflection layer so the memory log learns
+    from actual outcomes (Phase 4.3 outcome feedback loop).
+    """
+    store = _get_store()
+    pos = store.get_position(position_id)
+    if pos is None:
+        console.print(f"[red]Position {position_id} not found.[/red]")
+        raise typer.Exit(code=1)
+    if pos.get("status") == "CLOSED":
+        console.print(f"[yellow]Position {position_id} is already closed.[/yellow]")
+        raise typer.Exit(code=0)
+
+    exit_price = price or float(typer.prompt("Exit price ₹"))
+    close_date = date or datetime.datetime.now().strftime("%Y-%m-%d")
+
+    # Compute realized R
+    avg_entry = pos.get("avg_entry")
+    sl = pos.get("stop_loss")
+    direction = pos.get("direction", "LONG")
+    realized_r = 0.0
+    if avg_entry and sl:
+        sign = 1 if direction == "LONG" else -1
+        risk_per_share = sign * (avg_entry - sl)
+        if risk_per_share > 0:
+            realized_r = sign * (exit_price - avg_entry) / risk_per_share
+
+    console.print(f"\n[bold]Closing position #{position_id}:[/bold]")
+    console.print(f"  {pos['ticker']} {direction}: avg entry ₹{avg_entry or '?'} → exit ₹{exit_price:,.2f}")
+    console.print(f"  Realized R: [{'green' if realized_r >= 0 else 'red'}]{realized_r:+.2f}R[/]")
+    confirm = typer.confirm("Confirm close?", default=True)
+    if not confirm:
+        raise typer.Exit(code=0)
+
+    store.close_position(position_id, exit_price=exit_price, realized_r=realized_r, closed_date=close_date)
+    console.print(f"[green]✓ Position #{position_id} closed. Realized R: {realized_r:+.2f}[/green]")
+
+    # Feed realized R into the reflection layer (Phase 4.3)
+    ticker = pos.get("ticker", "")
+    final_decision_summary = (
+        f"Position closed: {ticker} {direction} | "
+        f"Avg entry ₹{avg_entry} | Exit ₹{exit_price:.2f} | "
+        f"Realized {realized_r:+.2f}R"
+    )
+    console.print("[dim]Storing outcome in memory log for future reflection...[/dim]")
+    try:
+        from tradingagents.agents.utils.memory import TradingMemoryLog
+        memory_log = TradingMemoryLog(DEFAULT_CONFIG)
+        memory_log.store_decision(
+            ticker=ticker,
+            trade_date=close_date,
+            final_trade_decision=final_decision_summary,
+        )
+        console.print("[dim]Memory log updated.[/dim]")
+    except Exception as exc:
+        console.print(f"[yellow]Memory log update failed (non-critical): {exc}[/yellow]")
+
+
+@positions_app.command("review")
+def positions_review(
+    ticker: Optional[str] = typer.Argument(None, help="Ticker to review (e.g. RELIANCE.NS). Omit with --all."),
+    all_positions: bool = typer.Option(False, "--all", "-a", help="Review all open positions."),
+    llm_provider: Optional[str] = typer.Option(
+        None, "--llm-provider", help="LLM provider (openai, anthropic, google, etc.)."
+    ),
+    backend_url: Optional[str] = typer.Option(None, "--backend-url", help="Backend URL override."),
+    analysts: str = typer.Option(
+        "market,news",
+        "--analysts",
+        help="Comma-separated analyst list to run (market,news,fundamentals,social).",
+    ),
+    save: bool = typer.Option(False, "--save", help="Save review to position_events automatically."),
+):
+    """Review open position(s) using the manage_position pipeline.
+
+    This is your morning routine: run 'positions review --all' to get a
+    one-line verdict table for every open position.
+
+    Example:
+        positions review RELIANCE.NS
+        positions review --all --save
+    """
+    store = _get_store()
+
+    if all_positions:
+        open_positions = store.list_positions(status="OPEN")
+        if not open_positions:
+            console.print("[yellow]No open positions to review.[/yellow]")
+            return
+    elif ticker:
+        pos = store.get_open_position(ticker.upper())
+        if pos is None:
+            console.print(f"[yellow]No open position found for {ticker.upper()}.[/yellow]")
+            return
+        open_positions = [pos]
+    else:
+        console.print("[red]Provide a TICKER or use --all.[/red]")
+        raise typer.Exit(code=1)
+
+    # Validate analyst selection
+    valid_analysts = {"market", "news", "fundamentals", "social"}
+    selected = [a.strip().lower() for a in analysts.split(",") if a.strip()]
+    invalid = [a for a in selected if a not in valid_analysts]
+    if invalid:
+        console.print(f"[red]Unknown analysts: {', '.join(invalid)}. Valid: {', '.join(valid_analysts)}[/red]")
+        raise typer.Exit(code=1)
+
+    # Resolve LLM provider
+    effective_provider = llm_provider or DEFAULT_CONFIG.get("llm_provider", "openai")
+    effective_backend = backend_url or DEFAULT_CONFIG.get("backend_url")
+    if not os.environ.get("TRADINGAGENTS_LLM_PROVIDER"):
+        try:
+            ensure_api_key(effective_provider)
+        except Exception:
+            pass
+
+    # Build config
+    config = DEFAULT_CONFIG.copy()
+    config["llm_provider"] = effective_provider
+    if effective_backend:
+        config["backend_url"] = effective_backend
+    config["max_debate_rounds"] = 1
+    config["max_risk_discuss_rounds"] = 1
+
+    # Create graph once (reused across all positions)
+    from tradingagents.graph.trading_graph import TradingAgentsGraph
+    graph = TradingAgentsGraph(
+        selected_analysts=selected,
+        config=config,
+        debug=False,
+    )
+
+    analysis_date = datetime.datetime.now().strftime("%Y-%m-%d")
+    verdict_rows = []
+
+    for pos in open_positions:
+        ticker_sym = pos.get("ticker", "UNKNOWN")
+        pos_id = pos.get("id")
+        console.print(f"\n[bold cyan]━━ Reviewing {ticker_sym} (position #{pos_id}) ━━[/bold cyan]")
+
+        with console.status(f"[cyan]Running manage_position pipeline for {ticker_sym}...[/cyan]"):
+            try:
+                final_state, action_dict = graph.run_manage_position(
+                    position=pos,
+                    trade_date=analysis_date,
+                    selected_analysts=tuple(selected),
+                )
+            except Exception as exc:
+                console.print(f"[red]Review failed for {ticker_sym}: {exc}[/red]")
+                verdict_rows.append((ticker_sym, "ERROR", "—", str(exc)[:60]))
+                continue
+
+        # Display the position action
+        action = action_dict or {}
+        action_str = action.get("action", "UNKNOWN")
+        thesis = action.get("thesis_status", "—")
+        reasoning = action.get("reasoning", "")
+
+        color = {
+            "HOLD": "yellow",
+            "EXIT_FULL": "red",
+            "EXIT_PARTIAL": "red",
+            "RAISE_SL": "cyan",
+            "ADD": "green",
+            "TAKE_TP_EARLY": "magenta",
+        }.get(action_str, "white")
+
+        console.print(Panel(
+            Markdown(final_state.get("final_trade_decision", "No decision")),
+            title=f"{ticker_sym} — Review Decision",
+            border_style="blue",
+            padding=(1, 2),
+        ))
+
+        # Save review to position_events if requested
+        if save and action_dict and pos_id:
+            store.record_review(
+                position_id=pos_id,
+                review_date=analysis_date,
+                action=action_str,
+                reasoning=reasoning,
+                thesis_status=thesis,
+                position_action_dict=action_dict,
+            )
+            console.print(f"[dim]Review saved to position_events for #{pos_id}.[/dim]")
+
+        verdict_rows.append((ticker_sym, action_str, thesis, reasoning[:60] + "…" if len(reasoning) > 60 else reasoning))
+
+    # Print summary verdict table for --all
+    if all_positions and verdict_rows:
+        console.print()
+        console.print(Rule("Morning Review Summary", style="bold green"))
+        summary_tbl = Table(box=box.SIMPLE_HEAD, header_style="bold magenta")
+        summary_tbl.add_column("Ticker", width=14)
+        summary_tbl.add_column("Action", width=14)
+        summary_tbl.add_column("Thesis", width=10)
+        summary_tbl.add_column("Reasoning", width=60)
+        for t_sym, act, thesis_s, reason_s in verdict_rows:
+            act_color = {
+                "HOLD": "yellow", "EXIT_FULL": "red", "EXIT_PARTIAL": "red",
+                "RAISE_SL": "cyan", "ADD": "green", "TAKE_TP_EARLY": "magenta",
+                "ERROR": "dim",
+            }.get(act, "white")
+            summary_tbl.add_row(t_sym, f"[{act_color}]{act}[/{act_color}]", thesis_s, reason_s)
+        console.print(summary_tbl)
+        if not save:
+            console.print("[dim]Tip: add --save to persist reviews to the position store.[/dim]")
 
 
 if __name__ == "__main__":

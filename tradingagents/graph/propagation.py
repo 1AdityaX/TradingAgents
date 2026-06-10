@@ -22,6 +22,9 @@ class Propagator:
         asset_type: str = "stock",
         past_context: str = "",
         instrument_context: str = "",
+        analysis_mode: str = "new_trade",
+        open_position: Optional[Dict[str, Any]] = None,
+        position_context_block: str = "",
     ) -> Dict[str, Any]:
         """Create the initial state for the agent graph.
 
@@ -30,6 +33,11 @@ class Propagator:
         ``TradingAgentsGraph.resolve_instrument_context``). When empty, agents
         fall back to ticker-only context via
         ``get_instrument_context_from_state``.
+
+        ``analysis_mode`` selects between 'new_trade' (default) and
+        'manage_position' (reviewing an open position from the position store).
+        When manage_position, ``open_position`` and ``position_context_block``
+        are injected into state so every agent can see the position details.
         """
         return {
             "messages": [("human", company_name)],
@@ -66,6 +74,15 @@ class Propagator:
             "fundamentals_report": "",
             "sentiment_report": "",
             "news_report": "",
+            # Phase 2 — trade signal engine initial values
+            "trade_signal": None,
+            "signal_validation_result": None,
+            "trader_retry_count": 0,
+            # Phase 4 — position management mode
+            "analysis_mode": analysis_mode,
+            "open_position": open_position,
+            "position_action": None,
+            "position_context_block": position_context_block,
         }
 
     def get_graph_args(self, callbacks: Optional[List] = None) -> Dict[str, Any]:

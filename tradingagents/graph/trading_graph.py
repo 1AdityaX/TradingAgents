@@ -43,6 +43,7 @@ from tradingagents.agents.utils.agent_utils import (
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
 from .conditional_logic import ConditionalLogic
+from .manage_setup import ManageGraphSetup
 from .setup import GraphSetup
 from .propagation import Propagator
 from .reflection import Reflector
@@ -130,10 +131,21 @@ class TradingAgentsGraph:
         self.ticker = None
         self.log_states_dict = {}  # date to full state dict
 
-        # Set up the graph: keep the workflow for recompilation with a checkpointer.
+        # Set up the new-trade graph.
         self.workflow = self.graph_setup.setup_graph(selected_analysts)
         self.graph = self.workflow.compile()
         self._checkpointer_ctx = None
+
+        # Manage-mode graph (compiled lazily on first use).
+        self.manage_graph_setup = ManageGraphSetup(
+            self.quick_thinking_llm,
+            self.deep_thinking_llm,
+            self.tool_nodes,
+            self.conditional_logic,
+            analyst_concurrency_limit=self.config.get("analyst_concurrency_limit", 1),
+        )
+        self._manage_workflow = None
+        self._manage_graph = None
 
     def _get_provider_kwargs(self) -> Dict[str, Any]:
         """Get provider-specific kwargs for LLM client creation."""
@@ -452,6 +464,80 @@ class TradingAgentsGraph:
         log_path = directory / f"full_states_log_{trade_date}.json"
         with open(log_path, "w", encoding="utf-8") as f:
             json.dump(self.log_states_dict[str(trade_date)], f, indent=4)
+
+    def _get_manage_graph(self, selected_analysts=("market", "news")):
+        """Return (or lazily compile) the manage-mode graph for the given analyst set."""
+        key = tuple(sorted(selected_analysts))
+        if self._manage_workflow is None or getattr(self, "_manage_analyst_key", None) != key:
+            self._manage_workflow = self.manage_graph_setup.setup_graph(selected_analysts)
+            self._manage_graph = self._manage_workflow.compile()
+            self._manage_analyst_key = key
+        return self._manage_graph
+
+    def run_manage_position(
+        self,
+        position: dict,
+        trade_date: str,
+        selected_analysts: tuple = ("market", "news"),
+        current_price: Optional[float] = None,
+    ) -> Tuple[dict, str]:
+        """Run the manage_position pipeline on an open position.
+
+        Args:
+            position: Position dict from PositionStore.get_position() or get_open_position().
+            trade_date: Date of the review (ISO format).
+            selected_analysts: Analyst nodes to run. Default: market + news.
+            current_price: Current market price for P&L calculation; fetched via
+                yfinance if None.
+
+        Returns:
+            (final_state, position_action_dict_or_none)
+        """
+        ticker = position.get("ticker", "UNKNOWN")
+        self.ticker = ticker
+
+        # Fetch current price for P&L context if not provided
+        if current_price is None:
+            try:
+                hist = yf.Ticker(ticker).history(period="3d")
+                if not hist.empty:
+                    current_price = float(hist["Close"].iloc[-1])
+            except Exception as exc:
+                logger.debug("run_manage_position: could not fetch price for %s: %s", ticker, exc)
+
+        # Build the position context block
+        from tradingagents.portfolio.store import PositionStore
+        tmp_store = PositionStore.__new__(PositionStore)
+        position_ctx = tmp_store.compute_position_context_block(position, current_price)
+
+        past_context = self.memory_log.get_past_context(ticker)
+        instrument_context = self.resolve_instrument_context(ticker, "stock")
+
+        init_state = self.propagator.create_initial_state(
+            company_name=ticker,
+            trade_date=trade_date,
+            asset_type="stock",
+            past_context=past_context,
+            instrument_context=instrument_context,
+            analysis_mode="manage_position",
+            open_position=position,
+            position_context_block=position_ctx,
+        )
+        args = self.propagator.get_graph_args()
+
+        manage_graph = self._get_manage_graph(selected_analysts)
+        final_state = manage_graph.invoke(init_state, **args)
+
+        # Log to memory
+        action_dict = final_state.get("position_action")
+        final_decision = final_state.get("final_trade_decision", "")
+        self.memory_log.store_decision(
+            ticker=ticker,
+            trade_date=trade_date,
+            final_trade_decision=f"[REVIEW] {final_decision}",
+        )
+
+        return final_state, action_dict
 
     def process_signal(self, full_signal):
         """Process a signal to extract the core decision."""

@@ -39,7 +39,7 @@ from tradingagents.agents.utils.structured import (
     bind_structured,
     invoke_structured_or_freetext,
 )
-from tradingagents.dataflows.reddit import fetch_reddit_posts
+from tradingagents.dataflows.reddit import DEFAULT_SUBREDDITS, fetch_reddit_posts
 from tradingagents.dataflows.stocktwits import fetch_stocktwits_messages
 
 
@@ -68,7 +68,18 @@ def create_sentiment_analyst(llm):
         # always sees something — either real data or a clear placeholder.
         news_block = get_news.func(ticker, start_date, end_date)
         stocktwits_block = fetch_stocktwits_messages(ticker, limit=30)
-        reddit_block = fetch_reddit_posts(ticker)
+        # For Indian tickers, use India-focused subreddits; US subreddits
+        # (wallstreetbets, stocks, investing) have minimal coverage of NSE stocks.
+        _is_indian = ticker.upper().endswith(".NS") or ticker.upper().endswith(".BO")
+        if _is_indian:
+            from tradingagents.dataflows.config import get_config as _get_cfg
+            _india_subs = _get_cfg().get(
+                "india_reddit_subreddits",
+                ["IndianStockMarket", "IndiaInvestments", "DalalStreetTalks"],
+            )
+            reddit_block = fetch_reddit_posts(ticker, subreddits=_india_subs)
+        else:
+            reddit_block = fetch_reddit_posts(ticker)
 
         system_message = _build_system_message(
             ticker=ticker,

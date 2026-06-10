@@ -129,3 +129,70 @@ def normalize_symbol(raw: str) -> str:
 def is_yahoo_safe(symbol: str) -> bool:
     """True when ``symbol`` only contains characters Yahoo symbols use."""
     return bool(symbol) and _YAHOO_SAFE.fullmatch(symbol) is not None
+
+
+# ---------------------------------------------------------------------------
+# Indian market helpers
+# ---------------------------------------------------------------------------
+
+def is_indian_ticker(symbol: str) -> bool:
+    """Return True when *symbol* is (or normalises to) an NSE or BSE ticker.
+
+    Accepts:
+      - Suffixed symbols: ``RELIANCE.NS``, ``INFY.BO``
+      - Bare NSE symbols passed without suffix: ``RELIANCE``, ``INFY``
+        (bare uppercase-only strings with no other exchange indicator)
+
+    Does NOT treat bare symbols as Indian if they already map to a known
+    non-Indian instrument (metals, index CFDs, forex pairs, crypto).
+    """
+    if not isinstance(symbol, str) or not symbol.strip():
+        return False
+    s = symbol.strip().upper().rstrip("+")
+    if s.endswith(".NS") or s.endswith(".BO"):
+        return True
+    # Not already Indian-suffixed; check it isn't a known non-Indian instrument
+    if s in _ALIASES:
+        return False
+    if len(s) == 6 and s[:3] in _CRYPTO_BASES and s[3:] == "USD":
+        return False
+    if len(s) == 6 and s[:3] in _FOREX_CURRENCIES and s[3:] in _FOREX_CURRENCIES:
+        return False
+    # Bare symbol that looks like an NSE stock (all-caps letters, optionally
+    # digits, no structural Yahoo characters other than alphanumerics).
+    # We conservatively accept bare symbols only when they contain only
+    # uppercase letters/digits and no Yahoo-native structural chars (=, ^, -).
+    return bool(re.fullmatch(r"[A-Z][A-Z0-9&]{0,19}", s))
+
+
+def normalize_indian_symbol(symbol: str) -> str:
+    """Normalise an Indian ticker to Yahoo Finance's ``.NS`` convention.
+
+    Resolution order:
+      1. Already has ``.NS`` or ``.BO`` suffix → return as-is (uppercased).
+      2. Bare symbol that ``is_indian_ticker`` accepts → append ``.NS``.
+      3. Everything else → return unchanged (let ``normalize_symbol`` handle it).
+
+    Bare-symbol normalisation covers users who type ``RELIANCE`` instead of
+    ``RELIANCE.NS``.  The ``.NS`` suffix is used as the canonical form because
+    NSE is the primary exchange for most listed Indian equities.
+    """
+    if not isinstance(symbol, str) or not symbol.strip():
+        return symbol
+    s = symbol.strip().upper().rstrip("+")
+    if s.endswith(".NS") or s.endswith(".BO"):
+        return s
+    if is_indian_ticker(symbol):
+        logger.info("Bare Indian symbol %r normalised to %r", symbol, s + ".NS")
+        return s + ".NS"
+    return symbol
+
+
+def detect_market_profile(symbol: str) -> str:
+    """Return ``"india"`` for ``.NS``/``.BO`` tickers, ``"us"`` otherwise."""
+    if not isinstance(symbol, str):
+        return "us"
+    s = symbol.strip().upper()
+    if s.endswith(".NS") or s.endswith(".BO"):
+        return "india"
+    return "us"

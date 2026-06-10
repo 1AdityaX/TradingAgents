@@ -1,11 +1,16 @@
 """Portfolio Manager: synthesises the risk-analyst debate into the final decision.
 
-Uses LangChain's ``with_structured_output`` so the LLM produces a typed
-``PortfolioDecision`` directly, in a single call.  The result is rendered
-back to markdown for storage in ``final_trade_decision`` so memory log,
-CLI display, and saved reports continue to consume the same shape they do
-today.  When a provider does not expose structured output, the agent falls
-back gracefully to free-text generation.
+Phase 2 upgrade: the PM now receives the validated TradeSignal and its
+deterministic sizing ticket (from the Signal Validator). Its checklist is:
+  1. Did the Signal Validator pass? (always yes at this stage — validator
+     already forced NO_TRADE if not)
+  2. Are the event risks acceptable within the expected holding window?
+  3. Do the portfolio caps remain respected?
+  4. Approve / modify (adjust confidence) / reject with the specific failed
+     check named.
+
+The executable signal ticket (entries, SL, TPs, qty, capital, risk, RR) is
+appended to the final_trade_decision regardless of the PM's narrative rating.
 """
 
 from __future__ import annotations
@@ -39,6 +44,34 @@ def create_portfolio_manager(llm):
             else ""
         )
 
+        # Pull signal ticket from the validator result
+        validation_result = state.get("signal_validation_result") or {}
+        signal_ticket = validation_result.get("ticket") or ""
+        sizing = validation_result.get("sizing") or {}
+        forced_no_trade = validation_result.get("forced_no_trade", False)
+
+        signal_section = ""
+        if signal_ticket:
+            signal_section = (
+                f"\n**Validated Signal Ticket** (from Signal Validator — do not modify prices):\n"
+                f"```\n{signal_ticket}\n```\n"
+            )
+        if forced_no_trade:
+            signal_section += (
+                "\n**Note**: Signal Validator forced NO_TRADE after retry exhaustion. "
+                "Recommend Hold/Underweight/Sell accordingly.\n"
+            )
+
+        # PM checklist prompt
+        checklist = (
+            "Decision checklist (work through in order):\n"
+            "1. Signal Validator passed? (Yes — validator already forced NO_TRADE if not)\n"
+            "2. Are event risks listed in the signal ticket acceptable within the holding window?\n"
+            "3. Do portfolio caps remain respected? (capital %, open risk %)\n"
+            "4. Approve → Buy/Overweight | Modify (flag concern) → Hold/Overweight | "
+            "Reject → Hold/Underweight/Sell. Name the specific failed check if rejecting."
+        )
+
         prompt = f"""As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
 
 {instrument_context}
@@ -55,7 +88,9 @@ def create_portfolio_manager(llm):
 **Context:**
 - Research Manager's investment plan: **{research_plan}**
 - Trader's transaction proposal: **{trader_plan}**
-{lessons_line}
+{signal_section}{lessons_line}
+{checklist}
+
 **Risk Analysts Debate History:**
 {history}
 
@@ -70,6 +105,11 @@ Be decisive and ground every conclusion in specific evidence from the analysts.{
             render_pm_decision,
             "Portfolio Manager",
         )
+
+        # Append the executable signal ticket to the decision so it persists
+        # in the memory log and CLI output regardless of PM narrative.
+        if signal_ticket:
+            final_trade_decision = final_trade_decision + "\n\n---\n\n" + signal_ticket
 
         new_risk_debate_state = {
             "judge_decision": final_trade_decision,

@@ -15,14 +15,18 @@ from pydantic import ValidationError
 from tradingagents.agents.analysts.sentiment_analyst import create_sentiment_analyst
 from tradingagents.agents.managers.research_manager import create_research_manager
 from tradingagents.agents.schemas import (
+    EntryLevel,
     PortfolioRating,
     ResearchPlan,
     SentimentBand,
     SentimentReport,
+    TakeProfit,
+    TradeSignal,
     TraderAction,
     TraderProposal,
     render_research_plan,
     render_sentiment_report,
+    render_trade_signal,
     render_trader_proposal,
 )
 from tradingagents.agents.trader.trader import create_trader
@@ -101,21 +105,43 @@ def _make_trader_state():
     return {
         "company_of_interest": "NVDA",
         "investment_plan": "**Recommendation**: Buy\n**Rationale**: ...\n**Strategic Actions**: ...",
+        "market_report": "LEVELS table: support 178, resistance 195.",
+        "fundamentals_report": "",
+        "news_report": "",
+        "sentiment_report": "",
+        "trader_retry_count": 0,
+        "signal_validation_result": None,
     }
 
 
-def _structured_trader_llm(captured: dict, proposal: TraderProposal | None = None):
+def _make_trade_signal():
+    return TradeSignal(
+        direction="LONG",
+        setup_type="breakout-retest",
+        timeframe="swing 5-15 sessions",
+        entries=[
+            EntryLevel(label="EP1", price=189.5, allocation_pct=100.0,
+                       trigger="limit at retest", rationale="key support"),
+        ],
+        stop_loss=178.0,
+        stop_basis="below swing low 179",
+        take_profits=[
+            TakeProfit(label="TP1", price=205.0, exit_pct=100.0, basis="prior high"),
+        ],
+        invalidation="close below 177",
+        confidence="medium",
+    )
+
+
+def _structured_trader_llm(captured: dict, signal: TradeSignal | None = None):
     """Build a MagicMock LLM whose with_structured_output binding captures the
-    prompt and returns a real TraderProposal so render_trader_proposal works.
+    prompt and returns a real TradeSignal so render_trade_signal works.
     """
-    if proposal is None:
-        proposal = TraderProposal(
-            action=TraderAction.BUY,
-            reasoning="Strong setup.",
-        )
+    if signal is None:
+        signal = _make_trade_signal()
     structured = MagicMock()
     structured.invoke.side_effect = lambda prompt: (
-        captured.__setitem__("prompt", prompt) or proposal
+        captured.__setitem__("prompt", prompt) or signal
     )
     llm = MagicMock()
     llm.with_structured_output.return_value = structured
@@ -126,22 +152,19 @@ def _structured_trader_llm(captured: dict, proposal: TraderProposal | None = Non
 class TestTraderAgent:
     def test_structured_path_produces_rendered_markdown(self):
         captured = {}
-        proposal = TraderProposal(
-            action=TraderAction.BUY,
-            reasoning="AI capex cycle intact; institutional flows constructive.",
-            entry_price=189.5,
-            stop_loss=178.0,
-            position_sizing="6% of portfolio",
-        )
-        llm = _structured_trader_llm(captured, proposal)
+        signal = _make_trade_signal()
+        llm = _structured_trader_llm(captured, signal)
         trader = create_trader(llm)
         result = trader(_make_trader_state())
         plan = result["trader_investment_plan"]
-        assert "**Action**: Buy" in plan
-        assert "**Entry Price**: 189.5" in plan
-        assert "FINAL TRANSACTION PROPOSAL: **BUY**" in plan
+        assert "**Direction**: LONG" in plan
+        assert "EP1" in plan
+        assert "FINAL TRANSACTION PROPOSAL: **LONG**" in plan
         # The same rendered markdown is also added to messages for downstream agents.
         assert plan in result["messages"][0].content
+        # Structured trade_signal dict is stored for the Signal Validator.
+        assert result["trade_signal"] is not None
+        assert result["trade_signal"]["direction"] == "LONG"
 
     def test_prompt_includes_investment_plan(self):
         captured = {}
@@ -150,12 +173,12 @@ class TestTraderAgent:
         trader(_make_trader_state())
         # The investment plan is in the user message of the captured prompt.
         prompt = captured["prompt"]
-        assert any("Proposed Investment Plan" in m["content"] for m in prompt)
+        assert any("investment plan" in m["content"].lower() for m in prompt)
 
     def test_falls_back_to_freetext_when_structured_unavailable(self):
         plain_response = (
-            "**Action**: Sell\n\nGuidance cut hits margins.\n\n"
-            "FINAL TRANSACTION PROPOSAL: **SELL**"
+            "**Direction**: NO_TRADE\n\nNo structural setup found.\n\n"
+            "FINAL TRANSACTION PROPOSAL: **NO_TRADE**"
         )
         llm = MagicMock()
         llm.with_structured_output.side_effect = NotImplementedError("provider unsupported")
@@ -163,6 +186,8 @@ class TestTraderAgent:
         trader = create_trader(llm)
         result = trader(_make_trader_state())
         assert result["trader_investment_plan"] == plain_response
+        # No structured signal in free-text fallback
+        assert result["trade_signal"] is None
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,18 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_CHECKPOINT_ENABLED":   "checkpoint_enabled",
     "TRADINGAGENTS_BENCHMARK_TICKER":     "benchmark_ticker",
     "TRADINGAGENTS_TEMPERATURE":          "temperature",
+    "TRADINGAGENTS_MARKET_PROFILE":       "market_profile",
+    # Phase 2 — risk / sizing overrides
+    "TRADINGAGENTS_ACCOUNT_EQUITY_INR":       "account_equity_inr",
+    "TRADINGAGENTS_RISK_PCT_PER_TRADE":       "risk_pct_per_trade",
+    "TRADINGAGENTS_MAX_OPEN_RISK_PCT":        "max_open_risk_pct",
+    "TRADINGAGENTS_MAX_POSITION_PCT":         "max_position_pct",
+    "TRADINGAGENTS_MIN_RISK_REWARD":          "min_risk_reward",
+    "TRADINGAGENTS_MIN_STOCK_PRICE":          "min_stock_price",
+    "TRADINGAGENTS_TXN_COST_PCT_ROUND_TRIP":  "txn_cost_pct_round_trip",
+    # Phase 3 — universe
+    "TRADINGAGENTS_UNIVERSE":                 "universe",
+    "TRADINGAGENTS_UNIVERSE_MAX_AGE_DAYS":    "universe_max_age_days",
 }
 
 
@@ -96,12 +108,35 @@ DEFAULT_CONFIG = _apply_env_overrides({
         "ECB Bank of England BOJ central bank policy",
         "oil commodities supply chain energy",
     ],
+    # Indian macro queries — used when market_profile is "india" (or auto-detected).
+    # These replace global_news_queries for Indian tickers.
+    "global_news_queries_india": [
+        "RBI monetary policy repo rate inflation India",
+        "Nifty Sensex FII DII flows outlook",
+        "India GDP IIP CPI WPI data",
+        "SEBI regulation announcement",
+        "INR USD rupee crude oil price impact India",
+        "US Fed rates impact emerging markets India",
+        "monsoon rural demand India",
+    ],
+    # Indian sentiment subreddits (used instead of wallstreetbets/stocks for .NS/.BO)
+    "india_reddit_subreddits": [
+        "IndianStockMarket",
+        "IndiaInvestments",
+        "DalalStreetTalks",
+    ],
+    # Market profile: "auto" detects from ticker suffix (.NS/.BO → india, else us).
+    # Set to "india" or "us" to force a specific profile for all tickers in the run.
+    "market_profile": "auto",
     # Data vendor configuration
     # Category-level configuration (default for all tools in category)
     "data_vendors": {
         "core_stock_apis": "yfinance",       # Options: alpha_vantage, yfinance
         "technical_indicators": "yfinance",  # Options: alpha_vantage, yfinance
+        # For .NS/.BO tickers, "fundamental_data" is auto-upgraded to "india_composite"
+        # by the market profile resolver in interface.py.
         "fundamental_data": "yfinance",      # Options: alpha_vantage, yfinance
+        # For .NS/.BO tickers, "news_data" is auto-upgraded to "india_news".
         "news_data": "yfinance",             # Options: alpha_vantage, yfinance
     },
     # Tool-level configuration (takes precedence over category-level)
@@ -114,6 +149,29 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # based on the ticker's exchange suffix. SPY remains the US default
     # so the reflection label keeps reading "Alpha vs SPY" for US tickers
     # while non-US tickers get their regional index automatically.
+    # Phase 2 — Trade Signal engine risk parameters
+    # These drive position_sizing.py (pure Python; no LLM involved).
+    "account_equity_inr": 1_000_000,       # ₹10L default account size
+    "risk_pct_per_trade": 1.0,             # % of equity risked between avg entry and SL
+    "max_open_risk_pct": 6.0,              # hard cap on total portfolio open risk %
+    "max_position_pct": 15.0,             # hard cap on single position as % of equity
+    "min_risk_reward": 1.8,               # minimum acceptable net RR (after txn costs)
+    "min_stock_price": 50,                # skip penny stocks (used by screener, Phase 3)
+    "max_stock_price": None,              # set e.g. 500 for small accounts; None = no cap
+    # Phase 3 — stock picker universe
+    # "dynamic" (default): downloads NSE EQUITY_L.csv, applies eligibility rules,
+    # caches ~400–600 liquid EQ-series stocks. Rebuilds automatically when older
+    # than universe_max_age_days. Static names (nifty50, nifty200, midcap150, nifty500)
+    # are offline fallback or explicit overrides via --universe flag.
+    "universe": "dynamic",
+    "universe_max_age_days": 7,
+    # Round-trip transaction cost % (brokerage + STT + DP + slippage).
+    # Used in net-RR check: a 1.8 gross RR that becomes 1.4 net on a small
+    # position fails the floor. On tiny accounts costs are first-class risk.
+    "txn_cost_pct_round_trip": 0.5,
+    # Max entry price deviation from last close: signals with all entries
+    # further than this % from last close are rejected as stale levels.
+    "max_entry_deviation_pct": 15.0,
     "benchmark_ticker": None,
     "benchmark_map": {
         ".NS":  "^NSEI",       # NSE India (Nifty 50)

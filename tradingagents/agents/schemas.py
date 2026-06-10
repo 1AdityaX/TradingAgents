@@ -21,7 +21,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -315,3 +315,334 @@ def render_sentiment_report(report: SentimentReport) -> str:
         "",
         report.narrative,
     ])
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — Trade Signal engine
+# ---------------------------------------------------------------------------
+
+
+class EntryLevel(BaseModel):
+    """A single entry point within a trade setup."""
+
+    label: str = Field(
+        description=(
+            "Entry label, e.g. 'EP1', 'EP2'. Use sequential numbering "
+            "where EP1 is the first (most conservative) entry."
+        ),
+    )
+    price: float = Field(
+        description=(
+            "Entry price in the instrument's quote currency (₹ for Indian tickers). "
+            "Must come from the Market Analyst's LEVELS table or a structural level "
+            "visible in the chart data. Do not invent round numbers."
+        ),
+    )
+    allocation_pct: float = Field(
+        description=(
+            "Percentage of the total position capital to deploy at this entry. "
+            "All entry allocations must sum to 100."
+        ),
+    )
+    trigger: str = Field(
+        description=(
+            "Order trigger description, e.g. 'limit at support retest 2,845–2,860' "
+            "or 'stop-buy above 2,910 breakout close'. Be specific."
+        ),
+    )
+    rationale: str = Field(
+        description="One sentence explaining why this level is a valid entry point.",
+    )
+
+
+class TakeProfit(BaseModel):
+    """A single take-profit target within a trade setup."""
+
+    label: str = Field(
+        description="TP label, e.g. 'TP1', 'TP2'. TP1 is always the nearest target.",
+    )
+    price: float = Field(
+        description=(
+            "Target price in the instrument's quote currency. "
+            "Must reference a structural level (prior swing high, supply zone, "
+            "key Fibonacci) or an R-multiple from the Market Analyst's LEVELS table."
+        ),
+    )
+    exit_pct: float = Field(
+        description=(
+            "Percentage of the open position to close at this target. "
+            "All TP exit percentages must sum to 100."
+        ),
+    )
+    basis: str = Field(
+        description=(
+            "Structural basis for this target, e.g. 'prior swing high 3,050' "
+            "or '1.5R from avg entry' or 'weekly supply zone 3,080–3,100'."
+        ),
+    )
+
+
+class TradeSignal(BaseModel):
+    """Structured swing-trade signal produced by the Trader.
+
+    The LLM chooses the setup; deterministic code (position_sizing.py) computes
+    all quantity and risk figures. All prices must trace to the Market Analyst's
+    LEVELS table or the verified market snapshot — never invented round numbers.
+
+    For NO_TRADE signals, set direction='NO_TRADE', populate setup_type and
+    invalidation with the reason, and leave entries/stop_loss/take_profits empty.
+    """
+
+    direction: Literal["LONG", "SHORT", "NO_TRADE"] = Field(
+        description=(
+            "Trade direction. Use NO_TRADE when no setup meets the RR floor "
+            "using real structural levels — NO_TRADE is a valid outcome, not a failure."
+        ),
+    )
+    setup_type: str = Field(
+        description=(
+            "Short label for the pattern, e.g. 'breakout-retest', "
+            "'pullback-to-50SMA', 'range-reversal', 'momentum-continuation'."
+        ),
+    )
+    timeframe: str = Field(
+        description="Expected holding period, e.g. 'swing 5–20 sessions'.",
+    )
+    entries: list[EntryLevel] = Field(
+        default_factory=list,
+        description=(
+            "1–3 entry levels for LONG/SHORT. Empty list for NO_TRADE. "
+            "Allocation percentages across all entries must sum to 100."
+        ),
+    )
+    stop_loss: Optional[float] = Field(
+        default=None,
+        description=(
+            "Stop-loss price. For LONG: must be below a structural level (swing low, "
+            "key support). For SHORT: must be above a structural level. "
+            "Never use a round number without a structural basis. "
+            "Must be null for NO_TRADE."
+        ),
+    )
+    stop_basis: str = Field(
+        default="",
+        description=(
+            "Structural basis for the stop, e.g. "
+            "'below swing low 2,790 minus 0.5×ATR(14)=22'. "
+            "Empty string for NO_TRADE."
+        ),
+    )
+    take_profits: list[TakeProfit] = Field(
+        default_factory=list,
+        description=(
+            "1–3 take-profit targets for LONG/SHORT. Empty list for NO_TRADE. "
+            "Exit percentages across all TPs must sum to 100."
+        ),
+    )
+    invalidation: str = Field(
+        description=(
+            "Condition that voids this idea BEFORE any entry fills, "
+            "e.g. 'daily close below 2,750 before EP1 fills'. "
+            "For NO_TRADE: state the reason no valid setup was found."
+        ),
+    )
+    event_risks: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Material events that fall inside the expected holding window, "
+            "e.g. 'Q1 results on 2026-07-18', 'F&O expiry 2026-06-26'. "
+            "Source from the instrument context and news reports."
+        ),
+    )
+    risk_reward_min: float = Field(
+        default=0.0,
+        description=(
+            "Your estimate of the minimum risk-reward ratio for this setup "
+            "based on TP1 vs avg entry vs stop. The Signal Validator will "
+            "recompute this deterministically net of transaction costs."
+        ),
+    )
+    confidence: Literal["high", "medium", "low"] = Field(
+        description=(
+            "Your confidence in this setup based on signal alignment, "
+            "data quality, and market conditions."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def check_no_trade_fields(self) -> "TradeSignal":
+        if self.direction == "NO_TRADE":
+            return self
+        if not self.entries:
+            raise ValueError("entries must not be empty for LONG/SHORT signals")
+        if self.stop_loss is None:
+            raise ValueError("stop_loss must be set for LONG/SHORT signals")
+        if not self.take_profits:
+            raise ValueError("take_profits must not be empty for LONG/SHORT signals")
+        return self
+
+
+def render_trade_signal(signal: TradeSignal) -> str:
+    """Render a TradeSignal to human-readable markdown.
+
+    Keeps backward compatibility: the trailing ``FINAL TRANSACTION PROPOSAL``
+    line is preserved so existing parsers that grep for it keep working.
+    """
+    if signal.direction == "NO_TRADE":
+        lines = [
+            "**Direction**: NO_TRADE",
+            "",
+            f"**Setup Type**: {signal.setup_type}",
+            f"**Timeframe**: {signal.timeframe}",
+            "",
+            f"**Reason / Invalidation**: {signal.invalidation}",
+            f"**Confidence**: {signal.confidence}",
+            "",
+            "FINAL TRANSACTION PROPOSAL: **NO_TRADE**",
+        ]
+        if signal.event_risks:
+            lines.insert(-1, f"**Event Risks**: {'; '.join(signal.event_risks)}")
+        return "\n".join(lines)
+
+    entry_lines = []
+    for e in signal.entries:
+        entry_lines.append(
+            f"  {e.label}: ₹{e.price:,.2f} ({e.allocation_pct:.0f}%) — {e.trigger}"
+        )
+    tp_lines = []
+    for t in signal.take_profits:
+        tp_lines.append(
+            f"  {t.label}: ₹{t.price:,.2f} (exit {t.exit_pct:.0f}%) — {t.basis}"
+        )
+
+    lines = [
+        f"**Direction**: {signal.direction}",
+        f"**Setup**: {signal.setup_type} | **Timeframe**: {signal.timeframe}",
+        f"**Confidence**: {signal.confidence}",
+        "",
+        "**Entries**:",
+        *entry_lines,
+        "",
+        f"**Stop Loss**: ₹{signal.stop_loss:,.2f} — {signal.stop_basis}",
+        "",
+        "**Take Profits**:",
+        *tp_lines,
+        "",
+        f"**Invalidation**: {signal.invalidation}",
+        f"**Est. RR**: {signal.risk_reward_min:.2f}",
+    ]
+    if signal.event_risks:
+        lines.append(f"**Event Risks**: {'; '.join(signal.event_risks)}")
+    lines.extend([
+        "",
+        f"FINAL TRANSACTION PROPOSAL: **{signal.direction}**",
+    ])
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — Position management action (manage_position mode)
+# ---------------------------------------------------------------------------
+
+
+class PositionAction(BaseModel):
+    """Structured action produced by the Position Manager when reviewing an open position.
+
+    Replaces TradeSignal in manage_position mode. The LLM decides the action;
+    the Position Action Validator enforces the hard rules (SL can only tighten,
+    broken thesis must force an exit action).
+    """
+
+    action: Literal["HOLD", "EXIT_FULL", "EXIT_PARTIAL", "RAISE_SL", "ADD", "TAKE_TP_EARLY"] = Field(
+        description=(
+            "Management action to take on the open position. "
+            "HOLD: no change; EXIT_FULL: close the entire position; "
+            "EXIT_PARTIAL: close a portion (set exit_pct); "
+            "RAISE_SL: tighten the stop-loss (set new_stop_loss — only allowed to move in "
+            "the profit direction, never widen); "
+            "ADD: add to the position at a new entry (set add_entry — re-validated vs caps); "
+            "TAKE_TP_EARLY: take a take-profit target before price reaches it."
+        ),
+    )
+    exit_pct: Optional[float] = Field(
+        default=None,
+        description=(
+            "Percentage of the remaining position to close. "
+            "Required for EXIT_PARTIAL and TAKE_TP_EARLY. Null for all other actions."
+        ),
+    )
+    new_stop_loss: Optional[float] = Field(
+        default=None,
+        description=(
+            "New stop-loss price for RAISE_SL action. "
+            "For a LONG position this must be HIGHER than the current stop-loss (tightening). "
+            "For a SHORT position this must be LOWER than the current stop-loss. "
+            "Never widen the stop-loss — that is the #1 discretionary-trader failure. "
+            "Null for all other actions."
+        ),
+    )
+    add_entry: Optional[EntryLevel] = Field(
+        default=None,
+        description=(
+            "New entry level for an ADD action. "
+            "Will be re-validated against position sizing caps (total risk must remain within limits). "
+            "Null for all other actions."
+        ),
+    )
+    thesis_status: Literal["intact", "weakened", "broken"] = Field(
+        description=(
+            "Current status of the original trade thesis based on the latest data. "
+            "'intact': thesis is playing out as expected; "
+            "'weakened': thesis has some cracks but is not invalidated; "
+            "'broken': thesis is invalidated — must use EXIT_FULL, EXIT_PARTIAL, or TAKE_TP_EARLY, "
+            "never HOLD."
+        ),
+    )
+    reasoning: str = Field(
+        description=(
+            "2-4 sentences explaining the action decision. Cite specific evidence: "
+            "current P&L in R-multiples, days held, key level tests, news catalysts, "
+            "and which part of the original thesis held or failed."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def check_action_fields(self) -> "PositionAction":
+        if self.thesis_status == "broken" and self.action == "HOLD":
+            raise ValueError(
+                "thesis_status='broken' requires an exit action (EXIT_FULL, EXIT_PARTIAL, or "
+                "TAKE_TP_EARLY). HOLD is not permitted when the thesis is broken."
+            )
+        if self.action in ("EXIT_PARTIAL", "TAKE_TP_EARLY") and self.exit_pct is None:
+            raise ValueError(f"exit_pct is required for action={self.action}")
+        if self.action == "RAISE_SL" and self.new_stop_loss is None:
+            raise ValueError("new_stop_loss is required for action=RAISE_SL")
+        if self.action == "ADD" and self.add_entry is None:
+            raise ValueError("add_entry is required for action=ADD")
+        return self
+
+
+def render_position_action(action: PositionAction) -> str:
+    """Render a PositionAction to markdown for display and the memory log."""
+    thesis_emoji = {"intact": "✓", "weakened": "~", "broken": "✗"}.get(action.thesis_status, "?")
+    lines = [
+        f"**Action**: {action.action}",
+        f"**Thesis Status**: {thesis_emoji} {action.thesis_status}",
+        "",
+        f"**Reasoning**: {action.reasoning}",
+    ]
+    if action.exit_pct is not None:
+        lines.extend(["", f"**Exit %**: {action.exit_pct:.0f}% of remaining position"])
+    if action.new_stop_loss is not None:
+        lines.extend(["", f"**New Stop Loss**: ₹{action.new_stop_loss:,.2f}"])
+    if action.add_entry is not None:
+        e = action.add_entry
+        lines.extend([
+            "",
+            f"**Add Entry**: {e.label} ₹{e.price:,.2f} ({e.allocation_pct:.0f}%) — {e.trigger}",
+        ])
+    lines.extend([
+        "",
+        f"FINAL POSITION ACTION: **{action.action}**",
+    ])
+    return "\n".join(lines)

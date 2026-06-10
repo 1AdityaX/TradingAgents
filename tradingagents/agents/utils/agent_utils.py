@@ -106,6 +106,11 @@ def build_instrument_context(
     :func:`resolve_instrument_identity`), the company name and business
     classification are injected so agents anchor to the real company rather
     than pattern-matching the price chart to a wrong one (#814).
+
+    For Indian tickers (``.NS`` / ``.BO``), an extended India-specific block is
+    appended covering currency, market hours, F&O ban status, circuit bands,
+    settlement, and upcoming event dates — eliminating a whole class of
+    LLM mistakes (dollar signs, US hours, ignoring circuits/ban list).
     """
     is_crypto = asset_type == "crypto"
     instrument_label = "asset" if is_crypto else "instrument"
@@ -142,7 +147,57 @@ def build_instrument_context(
             " Treat it as a crypto asset rather than a company, and do not "
             "assume company fundamentals are available."
         )
+
+    # India-specific context block — appended for NSE/BSE tickers to prevent
+    # US-market assumptions from leaking into the analysis.
+    s = ticker.upper().strip()
+    if s.endswith(".NS") or s.endswith(".BO"):
+        context += _build_india_context_block(ticker, identity)
+
     return context
+
+
+def _build_india_context_block(
+    ticker: str,
+    identity: Optional[Mapping[str, str]] = None,
+) -> str:
+    """Build the India INSTRUMENT CONTEXT block for NSE/BSE tickers.
+
+    Fetches live NSE data (F&O ban, calendar) best-effort; on failure each
+    field falls back to a "data unavailable" string rather than raising.
+    """
+    try:
+        from tradingagents.dataflows.interface import get_india_instrument_context
+        ctx = get_india_instrument_context(ticker)
+    except Exception as exc:  # noqa: BLE001 — fail open; never block analysis
+        logger.debug("India instrument context lookup failed for %s: %s", ticker, exc)
+        ctx = {}
+
+    fno_ban = ctx.get("fno_ban", "data unavailable")
+    calendar_ctx = ctx.get("calendar_context", "data unavailable")
+
+    # Determine index membership from identity if available
+    exchange = (identity or {}).get("exchange", "NSE" if ticker.endswith(".NS") else "BSE")
+    sector = (identity or {}).get("sector", "")
+    index_hint = ""
+    # Most large-cap NSE stocks are in Nifty 50; we don't know membership
+    # without a separate lookup, so we leave it to the analyst to verify.
+
+    lines = [
+        "",
+        "INSTRUMENT CONTEXT — INDIA:",
+        f"  Exchange: {exchange} | Currency: INR — all prices in ₹ (Indian Rupees).",
+        f"  In F&O ban list today: {fno_ban}.",
+        f"  {calendar_ctx}",
+        "  Circuit bands: none for F&O stocks; 2/5/10/20% for cash-only stocks.",
+        "  STCG 20% on gains held <12 months; STT applies on sell.",
+        "  IMPORTANT: Use ₹ (not $) for all prices. Do not reference US market hours.",
+        "  IMPORTANT: Check F&O ban status before suggesting any derivatives position.",
+    ]
+    if sector:
+        lines.insert(2, f"  Sector: {sector}.")
+
+    return "\n".join(lines)
 
 
 def get_instrument_context_from_state(state: Mapping[str, Any]) -> str:
@@ -153,14 +208,26 @@ def get_instrument_context_from_state(state: Mapping[str, Any]) -> str:
     Falls back to a ticker-only context — with no network lookup — when the
     state was constructed without it (bare programmatic states, tests), so a
     consumer is never forced to make a yfinance call mid-graph.
+
+    In manage_position mode, the open-position context block is appended so
+    every agent automatically sees the position details without prompt surgery.
     """
     context = state.get("instrument_context")
     if isinstance(context, str) and context.strip():
-        return context
-    return build_instrument_context(
-        str(state["company_of_interest"]),
-        state.get("asset_type", "stock"),
-    )
+        base = context
+    else:
+        base = build_instrument_context(
+            str(state["company_of_interest"]),
+            state.get("asset_type", "stock"),
+        )
+
+    # Append position block in manage_position mode
+    if state.get("analysis_mode") == "manage_position":
+        pos_block = state.get("position_context_block", "")
+        if pos_block:
+            base = base + "\n\n" + pos_block
+
+    return base
 
 
 def create_msg_delete():

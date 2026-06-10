@@ -1,0 +1,127 @@
+symbol,name,sector
+ABCAPITAL.NS,Aditya Birla Capital,Financial Services
+ABFRL.NS,Aditya Birla Fashion and Retail,Consumer Discretionary
+AIAENG.NS,AIA Engineering,Industrials
+AJANTPHARM.NS,Ajanta Pharma,Healthcare
+APLAPOLLO.NS,APL Apollo Tubes,Materials
+APOLLOTYRE.NS,Apollo Tyres,Automobiles
+AUROPHARMA.NS,Aurobindo Pharma,Healthcare
+BALKRISIND.NS,Balkrishna Industries,Automobiles
+BATAINDIA.NS,Bata India,Consumer Discretionary
+BHARATFORG.NS,Bharat Forge,Industrials
+BHEL.NS,Bharat Heavy Electricals,Industrials
+BIOCON.NS,Biocon,Healthcare
+CAMS.NS,Computer Age Management Services,Financial Services
+CANFINHOME.NS,Can Fin Homes,Financial Services
+CARBORUNDUM.NS,Carborundum Universal,Industrials
+CESC.NS,CESC,Utilities
+CROMPTON.NS,Crompton Greaves Consumer Electricals,Consumer Discretionary
+CUB.NS,City Union Bank,Financial Services
+CYIENT.NS,Cyient,Information Technology
+DABUR.NS,Dabur India,Consumer Staples
+DALBHARAT.NS,Dalmia Bharat,Materials
+EMAMILTD.NS,Emami,Consumer Staples
+ENGINERSIN.NS,Engineers India,Industrials
+EQUITASBNK.NS,Equitas Small Finance Bank,Financial Services
+ESCORTS.NS,Escorts Kubota,Industrials
+EXIDEIND.NS,Exide Industries,Automobiles
+FEDERALBNK.NS,Federal Bank,Financial Services
+FORTIS.NS,Fortis Healthcare,Healthcare
+GLENMARK.NS,Glenmark Pharmaceuticals,Healthcare
+GLAXO.NS,GSK Pharmaceuticals,Healthcare
+GNFC.NS,Gujarat Narmada Valley Fertilizers and Chemicals,Materials
+GODREJPROP.NS,Godrej Properties,Real Estate
+GRANULES.NS,Granules India,Healthcare
+GSPL.NS,Gujarat State Petronet,Energy
+HAPPSTMNDS.NS,Happiest Minds Technologies,Information Technology
+HFCL.NS,HFCL,Telecom
+HINDCOPPER.NS,Hindustan Copper,Materials
+IDFCFIRSTB.NS,IDFC First Bank,Financial Services
+IFCI.NS,IFCI,Financial Services
+IIFL.NS,IIFL Finance,Financial Services
+INOXWIND.NS,Inox Wind,Energy
+IPCALAB.NS,IPCA Laboratories,Healthcare
+J&KBANK.NS,Jammu & Kashmir Bank,Financial Services
+JKCEMENT.NS,JK Cement,Materials
+JKLAKSHMI.NS,JK Lakshmi Cement,Materials
+JUBLFOOD.NS,Jubilant FoodWorks,Consumer Discretionary
+JUBILANT.NS,Jubilant Pharmova,Healthcare
+KALPATPOWR.NS,Kalpataru Projects International,Industrials
+KANSAINER.NS,Kansai Nerolac Paints,Consumer Discretionary
+KAJARIACER.NS,Kajaria Ceramics,Materials
+KECL.NS,KEC International,Industrials
+KPITTECH.NS,KPIT Technologies,Information Technology
+KRBL.NS,KRBL,Consumer Staples
+LICHSGFIN.NS,LIC Housing Finance,Financial Services
+LICI.NS,Life Insurance Corporation of India,Financial Services
+LINDEINDIA.NS,Linde India,Materials
+M&MFIN.NS,Mahindra & Mahindra Financial Services,Financial Services
+MANAPPURAM.NS,Manappuram Finance,Financial Services
+MARICO.NS,Marico,Consumer Staples
+MASTEK.NS,Mastek,Information Technology
+MCX.NS,Multi Commodity Exchange of India,Financial Services
+METROPOLIS.NS,Metropolis Healthcare,Healthcare
+MFSL.NS,Max Financial Services,Financial Services
+MOTILALOFS.NS,Motilal Oswal Financial Services,Financial Services
+MPHASIS.NS,Mphasis,Information Technology
+NAUKRI.NS,Info Edge (India),Information Technology
+NATCOPHARM.NS,Natco Pharma,Healthcare
+NAVINFLUOR.NS,Navin Fluorine International,Materials
+NIACL.NS,The New India Assurance Company,Financial Services
+NILKAMAL.NS,Nilkamal,Consumer Discretionary
+NLCINDIA.NS,NLC India,Utilities
+NMDC.NS,NMDC,Materials
+NOCIL.NS,NOCIL,Materials
+NYKAA.NS,FSN E-Commerce Ventures,Consumer Discretionary
+OFSS.NS,Oracle Financial Services Software,Information Technology
+PAGEIND.NS,Page Industries,Consumer Discretionary
+PAYTM.NS,One 97 Communications,Financial Services
+PGHH.NS,Procter & Gamble Hygiene and Health Care,Consumer Staples
+PFIZER.NS,Pfizer,Healthcare
+PHOENIXLTD.NS,Phoenix Mills,Real Estate
+PRESTIGE.NS,Prestige Estates Projects,Real Estate
+PRINCEPIPE.NS,Prince Pipes and Fittings,Materials
+PVRINOX.NS,PVR INOX,Consumer Discretionary
+QUESS.NS,Quess Corp,Industrials
+RBLBANK.NS,RBL Bank,Financial Services
+RADICO.NS,Radico Khaitan,Consumer Staples
+RAJESHEXPO.NS,Rajesh Exports,Consumer Discretionary
+RAMCOCEM.NS,The Ramco Cements,Materials
+RKFORGE.NS,Ramkrishna Forgings,Industrials
+RELAXO.NS,Relaxo Footwears,Consumer Discretionary
+RITES.NS,RITES,Industrials
+SAFARI.NS,Safari Industries India,Consumer Discretionary
+SANOFI.NS,Sanofi India,Healthcare
+SAPPHIRE.NS,Sapphire Foods India,Consumer Discretionary
+SCHAEFFLER.NS,Schaeffler India,Industrials
+SHRINIVASGAS.NS,Shrinivas Gas,Energy
+SOBHA.NS,Sobha,Real Estate
+SONACOMS.NS,Sona BLW Precision Forgings,Automobiles
+STARHEALTH.NS,Star Health and Allied Insurance,Financial Services
+STLTECH.NS,Sterlite Technologies,Telecom
+SUNDARMFIN.NS,Sundaram Finance,Financial Services
+SUNDRMFAST.NS,Sundram Fasteners,Industrials
+SUPREMEIND.NS,Supreme Industries,Materials
+SYNGENE.NS,Syngene International,Healthcare
+TANLA.NS,Tanla Platforms,Information Technology
+TATACHEM.NS,Tata Chemicals,Materials
+TATACOMM.NS,Tata Communications,Telecom
+TATAELXSI.NS,Tata Elxsi,Information Technology
+THERMAX.NS,Thermax,Industrials
+TIMKEN.NS,Timken India,Industrials
+TRIDENT.NS,Trident,Materials
+TTKPRESTIG.NS,TTK Prestige,Consumer Discretionary
+UJJIVANSFB.NS,Ujjivan Small Finance Bank,Financial Services
+UNIVERCABLES.NS,Universal Cables,Industrials
+VAIBHAVGBL.NS,Vaibhav Global,Consumer Discretionary
+VARROC.NS,Varroc Engineering,Automobiles
+VGUARD.NS,V-Guard Industries,Consumer Discretionary
+VINATIORGA.NS,Vinati Organics,Materials
+VIPIND.NS,VIP Industries,Consumer Discretionary
+VSTIND.NS,VST Industries,Consumer Staples
+WELCORP.NS,Welspun Corp,Materials
+WELSPUNIND.NS,Welspun Living,Consumer Discretionary
+WHIRLPOOL.NS,Whirlpool of India,Consumer Discretionary
+WIPRO.NS,Wipro,Information Technology
+WOCKPHARMA.NS,Wockhardt,Healthcare
+ZENSARTECH.NS,Zensar Technologies,Information Technology

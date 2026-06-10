@@ -23,7 +23,11 @@ from .alpha_vantage import (
     get_global_news as get_alpha_vantage_global_news,
 )
 from .alpha_vantage_common import AlphaVantageRateLimitError
-from .symbol_utils import NoMarketDataError
+from .symbol_utils import NoMarketDataError, detect_market_profile
+
+# India-specific data modules
+from .india.screener_fundamentals import get_india_fundamentals
+from .india.india_news import get_india_news, get_india_global_news
 
 # Configuration and routing logic
 from .config import get_config
@@ -64,6 +68,8 @@ TOOLS_CATEGORIES = {
 VENDOR_LIST = [
     "yfinance",
     "alpha_vantage",
+    "india_composite",
+    "india_news",
 ]
 
 # Mapping of methods to their vendor-specific implementations
@@ -82,6 +88,7 @@ VENDOR_METHODS = {
     "get_fundamentals": {
         "alpha_vantage": get_alpha_vantage_fundamentals,
         "yfinance": get_yfinance_fundamentals,
+        "india_composite": get_india_fundamentals,
     },
     "get_balance_sheet": {
         "alpha_vantage": get_alpha_vantage_balance_sheet,
@@ -99,10 +106,12 @@ VENDOR_METHODS = {
     "get_news": {
         "alpha_vantage": get_alpha_vantage_news,
         "yfinance": get_news_yfinance,
+        "india_news": get_india_news,
     },
     "get_global_news": {
         "yfinance": get_global_news_yfinance,
         "alpha_vantage": get_alpha_vantage_global_news,
+        "india_news": get_india_global_news,
     },
     "get_insider_transactions": {
         "alpha_vantage": get_alpha_vantage_insider_transactions,
@@ -117,9 +126,37 @@ def get_category_for_method(method: str) -> str:
             return category
     raise ValueError(f"Method '{method}' not found in any category")
 
-def get_vendor(category: str, method: str = None) -> str:
+
+# Methods whose first positional arg is a ticker symbol — used for market
+# profile auto-detection in route_to_vendor.
+_TICKER_FIRST_METHODS = frozenset(
+    {
+        "get_stock_data",
+        "get_indicators",
+        "get_fundamentals",
+        "get_balance_sheet",
+        "get_cashflow",
+        "get_income_statement",
+        "get_news",
+        "get_insider_transactions",
+    }
+)
+
+# India vendor overrides applied when the ticker resolves to market_profile="india"
+# and the configured profile is "auto" or "india".
+_INDIA_VENDOR_OVERRIDES: dict[str, str] = {
+    "fundamental_data": "india_composite",
+    "news_data": "india_news",
+}
+
+
+def get_vendor(category: str, method: str = None, ticker: str = None) -> str:
     """Get the configured vendor for a data category or specific tool method.
-    Tool-level configuration takes precedence over category-level.
+
+    Tool-level configuration takes precedence over category-level.  When
+    *ticker* is provided and the active market profile resolves to ``"india"``,
+    the fundamental_data and news_data categories are transparently redirected
+    to the India-specific vendors.
     """
     config = get_config()
 
@@ -129,13 +166,26 @@ def get_vendor(category: str, method: str = None) -> str:
         if method in tool_vendors:
             return tool_vendors[method]
 
+    # Apply India overrides when the ticker is an NSE/BSE instrument or when the
+    # market_profile is explicitly set to "india" (covers get_global_news which
+    # has no ticker to auto-detect from).
+    if category in _INDIA_VENDOR_OVERRIDES:
+        profile = config.get("market_profile", "auto")
+        if profile == "india":
+            return _INDIA_VENDOR_OVERRIDES[category]
+        if profile == "auto" and ticker is not None and detect_market_profile(ticker) == "india":
+            return _INDIA_VENDOR_OVERRIDES[category]
+
     # Fall back to category-level configuration
     return config.get("data_vendors", {}).get(category, "default")
+
 
 def route_to_vendor(method: str, *args, **kwargs):
     """Route method calls to appropriate vendor implementation with fallback support."""
     category = get_category_for_method(method)
-    vendor_config = get_vendor(category, method)
+    # Extract ticker from positional args for market profile detection
+    ticker_hint = args[0] if args and method in _TICKER_FIRST_METHODS else None
+    vendor_config = get_vendor(category, method, ticker=ticker_hint)
     primary_vendors = [v.strip() for v in vendor_config.split(',')]
 
     if method not in VENDOR_METHODS:
@@ -194,3 +244,67 @@ def route_to_vendor(method: str, *args, **kwargs):
         raise first_error
 
     raise RuntimeError(f"No available vendor for '{method}'")
+
+
+# ---------------------------------------------------------------------------
+# India-specific data access (called directly by agents when market_profile
+# resolves to "india"; these supplement the standard vendor-routed calls).
+# ---------------------------------------------------------------------------
+
+def get_india_fii_dii_flows(ticker: str = "", sessions: int = 10) -> str:
+    """Return the last *sessions* FII/DII cash-market flow sessions.
+
+    *ticker* is accepted for interface consistency but not used — flows are
+    market-wide, not per-stock.
+    """
+    from .india.flows import get_fii_dii_flows
+    from datetime import date
+    return get_fii_dii_flows(as_of=date.today(), sessions=sessions)
+
+
+def get_india_shareholding(ticker: str) -> str:
+    """Return promoter/institutional shareholding summary for an Indian stock."""
+    from .india.shareholding import get_shareholding_summary
+    return get_shareholding_summary(ticker)
+
+
+def get_india_corporate_actions(ticker: str) -> str:
+    """Return upcoming corporate actions and results dates for an Indian stock."""
+    from .india.corporate_actions import get_corporate_actions
+    return get_corporate_actions(ticker)
+
+
+def get_india_instrument_context(ticker: str) -> dict:
+    """Return a dict of India-specific instrument context fields.
+
+    Used by ``build_instrument_context`` in agent_utils to enrich the
+    India INSTRUMENT CONTEXT block injected into every agent prompt.
+    """
+    from .india.nse_client import get_fno_ban_list
+    from .india.market_calendar import format_calendar_context, get_next_expiry
+    from .india.corporate_actions import get_corporate_actions
+    from datetime import date
+
+    result: dict = {}
+
+    # F&O ban list
+    try:
+        ban = get_fno_ban_list(date.today())
+        nse_sym = ticker.upper().replace(".NS", "").replace(".BO", "")
+        result["fno_ban"] = "YES" if nse_sym in ban else "No"
+    except Exception:
+        result["fno_ban"] = "data unavailable"
+
+    # Calendar context
+    try:
+        result["calendar_context"] = format_calendar_context(date.today())
+    except Exception:
+        result["calendar_context"] = "data unavailable"
+
+    # Next expiry date
+    try:
+        result["next_expiry"] = str(get_next_expiry(date.today()))
+    except Exception:
+        result["next_expiry"] = "data unavailable"
+
+    return result
