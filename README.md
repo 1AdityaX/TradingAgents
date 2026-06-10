@@ -11,287 +11,500 @@
   <a href="https://github.com/TauricResearch/" target="_blank"><img alt="Community" src="https://img.shields.io/badge/Join_GitHub_Community-TauricResearch-14C290?logo=discourse"/></a>
 </div>
 
+---
+
+# TradingAgents — India Edition
+
+A swing-trading research system for NSE/BSE built on top of the TauricResearch multi-agent LangGraph pipeline. The base framework provides the agent graph (analysts → debate → trader → risk → portfolio manager), multi-provider LLM support, structured outputs, and memory/reflection. This fork adds eight layers on top of that foundation, tailored specifically to Indian markets.
+
+> **Research tool only.** Signals require your judgment before execution. Nothing here is financial advice.
+
 <div align="center">
-  <!-- Keep these links. Translations will automatically update with the README. -->
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=de">Deutsch</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=es">Español</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=fr">français</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=ja">日本語</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=ko">한국어</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=pt">Português</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=ru">Русский</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=zh">中文</a>
+
+[Installation](#installation) · [CLI Commands](#cli-commands) · [Configuration](#configuration) · [Python API](#python-api) · [Architecture](#architecture) · [Citation](#citation)
+
 </div>
 
 ---
 
-# TradingAgents: Multi-Agents LLM Financial Trading Framework
+## What's in this fork
 
-## News
-- [2026-05] **TradingAgents v0.2.5** released with the grounded Sentiment Analyst, GPT-5.5 etc. model coverage, Qwen/GLM/MiniMax dual-region support, `TRADINGAGENTS_*` env-var configurability with API-key auto-detection, remote Ollama support, non-US alpha benchmarks, and ticker path-traversal hardening. See [CHANGELOG.md](CHANGELOG.md) for the full list.
-- [2026-04] **TradingAgents v0.2.4** released with structured-output agents (Research Manager, Trader, Portfolio Manager), LangGraph checkpoint resume, persistent decision log, DeepSeek/Qwen/GLM/Azure provider support, Docker, and a Windows UTF-8 encoding fix.
-- [2026-03] **TradingAgents v0.2.3** released with multi-language support, GPT-5.4 family models, unified model catalog, backtesting date fidelity, and proxy support.
-- [2026-03] **TradingAgents v0.2.2** released with GPT-5.4/Gemini 3.1/Claude 4.6 model coverage, five-tier rating scale, OpenAI Responses API, Anthropic effort control, and cross-platform stability.
-- [2026-02] **TradingAgents v0.2.0** released with multi-provider LLM support (GPT-5.x, Gemini 3.x, Claude 4.x, Grok 4.x) and improved system architecture.
-- [2026-01] **Trading-R1** [Technical Report](https://arxiv.org/abs/2509.11420) released, with [Terminal](https://github.com/TauricResearch/Trading-R1) expected to land soon.
+### Base pipeline (from TauricResearch v0.2.5)
 
-<div align="center">
-<a href="https://www.star-history.com/#TauricResearch/TradingAgents&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=TauricResearch/TradingAgents&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=TauricResearch/TradingAgents&type=Date" />
-   <img alt="TradingAgents Star History" src="https://api.star-history.com/svg?repos=TauricResearch/TradingAgents&type=Date" style="width: 80%; height: auto;" />
- </picture>
-</a>
-</div>
+The LangGraph graph runs five stages in sequence:
 
-> 🎉 **TradingAgents** officially released! We have received numerous inquiries about the work, and we would like to express our thanks for the enthusiasm in our community.
->
-> So we decided to fully open-source the framework. Looking forward to building impactful projects with you!
+1. **Analyst Team** — Market (technical), Fundamentals, News, and Sentiment analysts run in parallel or series. Each produces a structured report.
+2. **Research Team** — Bull Researcher and Bear Researcher debate the analysts' findings; the Research Manager adjudicates.
+3. **Trader** — Reads all reports and produces a `TradeSignal` (LONG/SHORT/NO_TRADE) with entry levels, stop-loss, and take-profit targets.
+4. **Risk Management** — Aggressive, Neutral, and Conservative risk analysts each apply a focused checklist to the Trader's proposal.
+5. **Portfolio Manager** — Approves, modifies, or rejects the signal.
 
-<div align="center">
+Multi-provider LLM support: OpenAI, Anthropic, Google Gemini, xAI Grok, DeepSeek, Qwen (international + China), GLM, MiniMax, OpenRouter, Ollama, Azure OpenAI.
 
-🚀 [TradingAgents](#tradingagents-framework) | ⚡ [Installation & CLI](#installation-and-cli) | 🎬 [Demo](https://www.youtube.com/watch?v=90gr5lwjIho) | 📦 [Package Usage](#tradingagents-package) | 🤝 [Contributing](#contributing) | 📄 [Citation](#citation)
+### India-specific additions
 
-</div>
+| Phase | What was added |
+|---|---|
+| **1 — India data layer** | `dataflows/india/`: NSE client, FII/DII flows, shareholding/pledge, corporate actions, Indian news (RSS), market calendar. Auto-detected from `.NS`/`.BO` suffix. |
+| **2 — Signal engine** | `TradeSignal` schema (entries EP1/EP2, SL with structural basis, TP ladder), `position_sizing.py` (deterministic, no LLM), Signal Validator node. |
+| **3 — Stock picker** | Dynamic NSE universe (~400–600 EQ stocks), quantitative screener (Stage 1–2), LLM picker (Stage 3, 1 call), `scan` CLI command. |
+| **4 — Position store** | SQLite at `~/.tradingagents/portfolio.db`, manage-position mode in the graph, `positions` CLI sub-commands, outcome feedback to the reflection layer. |
+| **5 — Prompt precision** | India preamble injected into every agent, structured levels table from Market Analyst, Indian checklists for Fundamentals/News/Risk agents, few-shot anchors. |
+| **6 — Hardening** | Signal Validator unit tests, data freshness guards, NSE client retry/cache, ATR-based SL computation. |
+| **7 — Operating cadence** | `routine` CLI command, scan-gating (blocks scan when fully invested), review reminders. |
+| **8 — Small-account mode** | `account_profile: "small"` preset, light pipeline, monthly LLM budget tracking (`budget/spend_tracker.py`), weekly scan cadence, first-run framing. |
 
-## TradingAgents Framework
+---
 
-TradingAgents is a multi-agent trading framework that mirrors the dynamics of real-world trading firms. By deploying specialized LLM-powered agents: from fundamental analysts, sentiment experts, and technical analysts, to trader, risk management team, the platform collaboratively evaluates market conditions and informs trading decisions. Moreover, these agents engage in dynamic discussions to pinpoint the optimal strategy.
+## Installation
 
-<p align="center">
-  <img src="assets/schema.png" style="width: 100%; height: auto;">
-</p>
-
-> TradingAgents framework is designed for research purposes. Trading performance may vary based on many factors, including the chosen backbone language models, model temperature, trading periods, the quality of data, and other non-deterministic factors. [It is not intended as financial, investment, or trading advice.](https://tauric.ai/disclaimer/)
-
-Our framework decomposes complex trading tasks into specialized roles.
-
-### Analyst Team
-- Fundamentals Analyst: Evaluates company financials and performance metrics, identifying intrinsic values and potential red flags.
-- Sentiment Analyst: Aggregates news headlines, StockTwits, and Reddit chatter into a single sentiment read to gauge short-term market mood.
-- News Analyst: Monitors global news and macroeconomic indicators, interpreting the impact of events on market conditions.
-- Technical Analyst: Utilizes technical indicators (like MACD and RSI) to detect trading patterns and forecast price movements.
-
-<p align="center">
-  <img src="assets/analyst.png" width="100%" style="display: inline-block; margin: 0 2%;">
-</p>
-
-### Researcher Team
-- Comprises both bullish and bearish researchers who critically assess the insights provided by the Analyst Team. Through structured debates, they balance potential gains against inherent risks.
-
-<p align="center">
-  <img src="assets/researcher.png" width="70%" style="display: inline-block; margin: 0 2%;">
-</p>
-
-### Trader Agent
-- Composes reports from the analysts and researchers to make informed trading decisions, determining the timing and magnitude of trades.
-
-<p align="center">
-  <img src="assets/trader.png" width="70%" style="display: inline-block; margin: 0 2%;">
-</p>
-
-### Risk Management and Portfolio Manager
-- Continuously evaluates portfolio risk by assessing market volatility, liquidity, and other risk factors. The risk management team evaluates and adjusts trading strategies, providing assessment reports to the Portfolio Manager for final decision.
-- The Portfolio Manager approves/rejects the transaction proposal. If approved, the order will be sent to the simulated exchange and executed.
-
-<p align="center">
-  <img src="assets/risk.png" width="70%" style="display: inline-block; margin: 0 2%;">
-</p>
-
-## Installation and CLI
-
-### Installation
-
-Clone TradingAgents:
 ```bash
-git clone https://github.com/TauricResearch/TradingAgents.git
+git clone <your-fork-url>
 cd TradingAgents
-```
-
-Create a virtual environment in any of your favorite environment managers:
-```bash
 conda create -n tradingagents python=3.13
 conda activate tradingagents
-```
-
-Install the package and its dependencies:
-```bash
 pip install .
 ```
 
-### Docker
-
-Alternatively, run with Docker:
+Or with Docker:
 ```bash
-cp .env.example .env  # add your API keys
+cp .env.example .env   # fill in your API keys
 docker compose run --rm tradingagents
 ```
 
-For local models with Ollama:
-```bash
-docker compose --profile ollama run --rm tradingagents-ollama
-```
+### API keys
 
-### Required APIs
-
-TradingAgents supports multiple LLM providers. Set the API key for your chosen provider:
+Set the key for whichever LLM provider you use:
 
 ```bash
-export OPENAI_API_KEY=...          # OpenAI (GPT)
-export GOOGLE_API_KEY=...          # Google (Gemini)
-export ANTHROPIC_API_KEY=...       # Anthropic (Claude)
-export XAI_API_KEY=...             # xAI (Grok)
-export DEEPSEEK_API_KEY=...        # DeepSeek
-export DASHSCOPE_API_KEY=...       # Qwen — International (dashscope-intl.aliyuncs.com)
-export DASHSCOPE_CN_API_KEY=...    # Qwen — China (dashscope.aliyuncs.com)
-export ZHIPU_API_KEY=...           # GLM via Z.AI (international)
-export ZHIPU_CN_API_KEY=...        # GLM via BigModel (China, open.bigmodel.cn)
-export MINIMAX_API_KEY=...         # MiniMax — Global (api.minimax.io, M2.x, 204K ctx)
-export MINIMAX_CN_API_KEY=...      # MiniMax — China (api.minimaxi.com, M2.x, 204K ctx)
-export OPENROUTER_API_KEY=...      # OpenRouter
-export ALPHA_VANTAGE_API_KEY=...   # Alpha Vantage
+export OPENAI_API_KEY=...
+export ANTHROPIC_API_KEY=...
+export GOOGLE_API_KEY=...
+export XAI_API_KEY=...
+export DEEPSEEK_API_KEY=...
+export DASHSCOPE_API_KEY=...        # Qwen — international
+export DASHSCOPE_CN_API_KEY=...     # Qwen — China
+export ZHIPU_API_KEY=...            # GLM — international
+export ZHIPU_CN_API_KEY=...         # GLM — China
+export MINIMAX_API_KEY=...          # MiniMax — global
+export MINIMAX_CN_API_KEY=...       # MiniMax — China
+export OPENROUTER_API_KEY=...
+export ALPHA_VANTAGE_API_KEY=...
 ```
 
-For enterprise providers (e.g. Azure OpenAI, AWS Bedrock), copy `.env.enterprise.example` to `.env.enterprise` and fill in your credentials.
+For enterprise providers (Azure OpenAI, AWS Bedrock), copy `.env.enterprise.example` to `.env.enterprise`.
 
-For local models, configure Ollama with `llm_provider: "ollama"`. The default endpoint is `http://localhost:11434/v1`; set `OLLAMA_BASE_URL` to point at a remote `ollama-serve`. Pull models with `ollama pull <name>`, and pick "Custom model ID" in the CLI for any model not listed by default.
+---
 
-Alternatively, copy `.env.example` to `.env` and fill in your keys:
+## CLI Commands
+
+All commands are available as `tradingagents <command>` (installed entry point) or `python -m cli.main <command>`.
+
+### `analyze` — deep analysis on a single ticker
+
 ```bash
-cp .env.example .env
+tradingagents analyze
+tradingagents analyze --checkpoint          # enable checkpoint/resume
+tradingagents analyze --clear-checkpoints   # reset checkpoints, then run
 ```
 
-### CLI Usage
+Interactive prompts walk you through: ticker, analysis date, output language, analyst selection, research depth, LLM provider, model selection, and provider-specific thinking configuration. All prompts are skipped when the corresponding `TRADINGAGENTS_*` environment variable is set, making it fully non-interactive in CI.
 
-Launch the interactive CLI:
+Supported tickers include anything yfinance covers: US stocks (`AAPL`, `SPY`), Indian (`RELIANCE.NS`, `TCS.NS`, `INFY.BO`), Hong Kong (`0700.HK`), Japan (`7203.T`), London (`AZN.L`), China A-shares (`600519.SS`), crypto (`BTC-USD`), and more.
+
+Reports are saved under `~/.tradingagents/logs/<TICKER>/<DATE>/` with per-section markdown files and a consolidated `complete_report.md`.
+
+### `scan` — stock universe scanner
+
 ```bash
-tradingagents          # installed command
-python -m cli.main     # alternative: run directly from source
+tradingagents scan                              # dynamic universe, top 5 picks
+tradingagents scan --universe nifty200 --top 3
+tradingagents scan --top 3 --run-analysis       # pipe picks into full analysis
+tradingagents scan --min-liquidity 25           # higher liquidity floor (₹25 Cr)
 ```
-You will see a screen where you can select your desired tickers, analysis date, LLM provider, research depth, and more.
 
-### Markets and tickers
+The scan runs a three-stage funnel:
 
-TradingAgents works with any market Yahoo Finance covers, using the exchange-suffixed ticker. Company identity and the alpha benchmark resolve automatically per market.
+1. **Quantitative screen** (`tradingagents/picker/screener.py`) — liquidity filter, price band, F&O ban check, composite technical score (RSI, relative strength vs Nifty, volume surge, distance from 52-week high).
+2. **Candidate card enrichment** (`tradingagents/picker/candidate.py`) — attaches next results date, promoter pledge flag, and 3 latest headlines to each top-25 candidate.
+3. **LLM ranking** (`tradingagents/picker/picker_agent.py`) — one LLM call ranks all 25 candidates and returns the top N with a setup hypothesis per pick.
 
-- US: `AAPL`, `SPY`
-- Hong Kong: `0700.HK` · Tokyo: `7203.T` · London: `AZN.L`
-- India: `RELIANCE.NS`, `.BO` · Canada: `.TO` · Australia: `.AX`
-- China A-shares: Shanghai `.SS`, Shenzhen `.SZ` (e.g. `600519.SS` for Kweichow Moutai)
-- Crypto: `BTC-USD`, `ETH-USD`
+Universe options: `dynamic` (default — auto-rebuilt from NSE `EQUITY_L.csv`, ~400–600 liquid EQ stocks), `nifty50`, `nifty_next50`, `nifty200`, `midcap150`, `nifty500` (static CSV fallbacks).
 
-<p align="center">
-  <img src="assets/cli/cli_init.png" width="100%" style="display: inline-block; margin: 0 2%;">
-</p>
+The scan is **blocked** automatically when open portfolio risk has reached the cap — the CLI prints a "fully invested" notice and exits.
 
-An interface will appear showing results as they load, letting you track the agent's progress as it runs.
+### `universe` — manage the dynamic stock universe cache
 
-<p align="center">
-  <img src="assets/cli/cli_news.png" width="100%" style="display: inline-block; margin: 0 2%;">
-</p>
+```bash
+tradingagents universe show       # show cache metadata and first 30 stocks
+tradingagents universe refresh    # force-rebuild from NSE EQUITY_L.csv
+```
 
-<p align="center">
-  <img src="assets/cli/cli_transaction.png" width="100%" style="display: inline-block; margin: 0 2%;">
-</p>
+The dynamic universe downloads NSE's official equity master list, applies eligibility rules (EQ series only, price band, liquidity floor, not in F&O ban list), and caches the result at `~/.tradingagents/universe.parquet`. It auto-rebuilds when older than `universe_max_age_days` (default 7) — no manual refresh needed during normal use.
 
-## TradingAgents Package
+### `routine` — operating cadence guide
 
-### Implementation Details
+```bash
+tradingagents routine          # show cadence table + current portfolio status
+tradingagents routine --run    # auto-run the right command for the current time
+```
 
-We built TradingAgents with LangGraph to ensure flexibility and modularity. The framework supports multiple LLM providers: OpenAI, Google, Anthropic, xAI, DeepSeek, Qwen (Alibaba DashScope, international and China endpoints), GLM (Zhipu), MiniMax (global + China), OpenRouter, Ollama for local models, and Azure OpenAI for enterprise.
+Shows the recommended IST-time-aware workflow, current market phase (pre-open / open / post-close / holiday), portfolio status (open risk %, position count, unreviewed positions), and time-contextual guidance. Use `--run` to automatically execute the appropriate command (morning review before open, scan after close).
 
-### Python Usage
+### `positions` — position store
 
-To use TradingAgents inside your code, you can import the `tradingagents` module and initialize a `TradingAgentsGraph()` object. The `.propagate()` function will return a decision. You can run `main.py`, here's also a quick example:
+```bash
+tradingagents positions list                       # list open positions
+tradingagents positions list --status all          # all positions
+tradingagents positions add                        # interactive entry
+tradingagents positions add --from-last-signal     # log last analysis signal
+tradingagents positions update <ID> --fill         # record a fill
+tradingagents positions update <ID> --exit         # record a partial exit
+tradingagents positions update <ID> --move-sl      # tighten the stop-loss
+tradingagents positions close <ID>                 # close + compute realized R
+tradingagents positions review RELIANCE.NS         # manage-position mode
+tradingagents positions review --all               # morning review all open
+tradingagents positions review --all --save        # review + persist to store
+```
+
+Positions are stored in SQLite at `~/.tradingagents/portfolio.db`. The schema tracks entries, avg entry, qty, SL, TPs, thesis, last review date, and a full event log (fills, partial exits, SL moves, reviews, closes).
+
+**Hard rules enforced in the CLI:**
+- Stop-loss can only tighten (never widen) — checked on `--move-sl` and in the Signal Validator.
+- `positions close` computes the realized R-multiple and feeds it into the memory log for future reflection.
+
+The `review` command runs the graph in `manage_position` mode. The Trader produces a `PositionAction` (HOLD / EXIT_FULL / EXIT_PARTIAL / RAISE_SL / ADD / TAKE_TP_EARLY) instead of a `TradeSignal`, and the prompt is reframed: bull argues thesis intact, bear argues thesis degraded.
+
+### `profile` — account profile and LLM budget
+
+```bash
+tradingagents profile                  # show effective config with sources
+tradingagents profile set small        # persist small-account profile
+tradingagents profile set standard
+tradingagents profile budget           # monthly LLM spend history
+```
+
+---
+
+## Configuration
+
+`tradingagents/default_config.py` is the single source of truth. Precedence (highest wins): **env vars → account-profile preset → saved `~/.tradingagents/profile.json` → base defaults**.
+
+### Key settings
+
+```python
+# LLM
+"llm_provider": "openai"          # openai, google, anthropic, xai, deepseek, qwen, glm, minimax, openrouter, ollama, azure
+"deep_think_llm": "gpt-5.5"
+"quick_think_llm": "gpt-5.4-mini"
+"temperature": None               # set e.g. 0.2 for Trader/PM; None = provider default
+"max_debate_rounds": 1
+"pipeline": "full"                # "full" | "light" (skips debates, ~60% fewer tokens)
+
+# Market profile
+"market_profile": "auto"          # "auto" | "india" | "us" — auto-detects from ticker suffix
+
+# Position sizing (pure Python, no LLM)
+"account_equity_inr": 1_000_000
+"risk_pct_per_trade": 1.0         # % of equity risked between avg entry and SL
+"max_open_risk_pct": 6.0          # hard cap on total portfolio risk
+"max_position_pct": 15.0          # single position cap as % of equity
+"min_risk_reward": 1.8            # minimum net RR (after transaction costs)
+"txn_cost_pct_round_trip": 0.5    # brokerage + STT + DP + slippage
+
+# Stock universe (Phase 3)
+"universe": "dynamic"             # "dynamic" | "nifty50" | "nifty200" | "midcap150" | "nifty500"
+"universe_max_age_days": 7
+
+# Small-account mode (Phase 8)
+"account_profile": "standard"     # "standard" | "small"
+"monthly_llm_budget_inr": None    # warn at 80%, alert at 100%
+"scan_cadence": "daily"           # "daily" | "weekly"
+```
+
+### Environment variable overrides
+
+Every key in the config can be set via a `TRADINGAGENTS_*` env var without code changes:
+
+```bash
+TRADINGAGENTS_LLM_PROVIDER=anthropic
+TRADINGAGENTS_DEEP_THINK_LLM=claude-opus-4-8
+TRADINGAGENTS_QUICK_THINK_LLM=claude-haiku-4-5-20251001
+TRADINGAGENTS_MARKET_PROFILE=india
+TRADINGAGENTS_ACCOUNT_EQUITY_INR=500000
+TRADINGAGENTS_RISK_PCT_PER_TRADE=1.0
+TRADINGAGENTS_MIN_RISK_REWARD=1.8
+TRADINGAGENTS_ACCOUNT_PROFILE=small
+TRADINGAGENTS_PIPELINE=light
+TRADINGAGENTS_MONTHLY_LLM_BUDGET_INR=300
+TRADINGAGENTS_TEMPERATURE=0.2
+```
+
+### Small-account profile
+
+`tradingagents profile set small` (or `TRADINGAGENTS_ACCOUNT_PROFILE=small`) activates a preset designed for accounts ≤ ₹50k:
+
+| Setting | Standard | Small |
+|---|---|---|
+| `max_stock_price` | no cap | ₹500 |
+| `max_position_pct` | 15% | 100% |
+| `max_concurrent_positions` | unlimited | 2 |
+| `risk_pct_per_trade` | 1.0% | 2.0% |
+| `max_open_risk_pct` | 6.0% | 4.0% |
+| `pipeline` | full | light |
+| `monthly_llm_budget_inr` | no cap | ₹300 |
+| `scan_cadence` | daily | weekly |
+
+A one-time framing message is shown on the first scan/analyze run with a small account.
+
+---
+
+## Architecture
+
+### Directory layout
+
+```
+tradingagents/
+├── agents/
+│   ├── analysts/           # market, news, fundamentals, sentiment analysts
+│   ├── managers/           # portfolio manager
+│   ├── researchers/        # bull, bear, research manager
+│   ├── risk_mgmt/          # aggressive, neutral, conservative risk analysts
+│   ├── stock_picker/       # Phase 3 picker agent node
+│   ├── trader/             # trader agent (produces TradeSignal or PositionAction)
+│   ├── validator/          # signal_validator.py — deterministic post-trade check
+│   ├── utils/              # memory log, structured output helpers, market data validation
+│   └── schemas.py          # Pydantic schemas: TradeSignal, PositionAction, PortfolioDecision, ...
+├── budget/
+│   └── spend_tracker.py    # monthly LLM spend tracking (Phase 8)
+├── dataflows/
+│   ├── india/              # nse_client, flows, shareholding, corporate_actions, india_news, market_calendar
+│   ├── interface.py        # market profile router (auto-detects .NS/.BO)
+│   ├── y_finance.py        # yfinance OHLCV, fundamentals, indicators
+│   ├── reddit.py           # Reddit sentiment (India subreddits for .NS/.BO)
+│   └── symbol_utils.py     # ticker normalisation, asset-type detection
+├── graph/
+│   ├── trading_graph.py    # TradingAgentsGraph: main entry point
+│   ├── manage_setup.py     # manage_position mode setup
+│   ├── propagation.py      # state initialisation and streaming
+│   ├── reflection.py       # realized-return reflection layer
+│   └── checkpointer.py     # LangGraph SQLite checkpointing
+├── picker/
+│   ├── universe.py         # dynamic NSE universe builder + static CSV fallback
+│   ├── screener.py         # Stage 1–2 quantitative screen (no LLM)
+│   ├── candidate.py        # CandidateCard builder
+│   └── picker_agent.py     # Stage 3 LLM ranking (1 call)
+├── portfolio/
+│   └── store.py            # SQLite position store, event log
+├── risk/
+│   └── position_sizing.py  # deterministic position sizing calculator
+└── default_config.py       # all config defaults + env-var override table
+cli/
+├── main.py                 # analyze, scan, universe, routine, profile, positions sub-commands
+└── utils.py                # LLM provider menus, API key prompts, ticker helpers
+```
+
+### Signal flow for a new trade
+
+```
+scan
+  ↓
+universe.py  → ~400–600 NSE EQ stocks (lazy cache, auto-refresh weekly)
+screener.py  → top 25 by composite technical score (price/liquidity/RSI/RS/volume)
+candidate.py → enrich with results dates, pledge flags, headlines
+picker_agent → 1 LLM call → top 3–5 with setup hypotheses
+  ↓ (--run-analysis or 'analyze' directly)
+TradingAgentsGraph.stream()
+  ├── Market Analyst    → LEVELS table, ATR(14), verified snapshot
+  ├── News Analyst      → Indian news (RSS), FII/DII flows, source+date required
+  ├── Fundamentals      → yfinance + India composite (pledge, FII holding, results date)
+  └── Sentiment Analyst → r/IndianStockMarket + Google News headlines
+  ↓
+Bull/Bear debate → Research Manager → TradeSignal draft
+  ↓
+Trader → TradeSignal (LONG/SHORT/NO_TRADE with EP1/EP2, SL+basis, TP1/TP2)
+  ↓
+Signal Validator (code, no LLM):
+  - SL on correct side of entry
+  - entries within ±15% of last close
+  - net RR ≥ min_risk_reward after txn costs
+  - qty ≥ 1 share within risk caps
+  - no circuit-band violation
+  On failure: one retry to Trader, then downgrade to NO_TRADE
+  ↓
+position_sizing.py → qty, capital ₹, risk ₹, gross/net RR
+  ↓
+Risk debate (Aggressive/Neutral/Conservative with distinct checklists)
+  ↓
+Portfolio Manager → PortfolioDecision + approved signal ticket
+```
+
+### Key schema types (`agents/schemas.py`)
+
+**`TradeSignal`** — produced by the Trader:
+- `direction`: LONG / SHORT / NO_TRADE
+- `entries`: list of `EntryLevel` (label, price in ₹, allocation %, trigger, rationale)
+- `stop_loss` + `stop_basis`: price anchored to a structural level
+- `take_profits`: list of `TakeProfit` (label, price, exit %, basis)
+- `event_risks`: list of upcoming events inside the holding window
+- `confidence`: high / medium / low
+
+**`PositionAction`** — produced in manage-position mode:
+- `action`: HOLD / EXIT_FULL / EXIT_PARTIAL / RAISE_SL / ADD / TAKE_TP_EARLY
+- `thesis_status`: intact / weakened / broken (broken forces an exit action — validated)
+- `new_stop_loss`: for RAISE_SL (validator enforces tighten-only)
+- `reasoning`: 2–4 sentences citing current R, days held, level tests, news
+
+**`PositionSizingResult`** — from `position_sizing.py`:
+- `qty`, `avg_entry_price`, `capital_inr`, `capital_pct`, `risk_inr`, `risk_pct`
+- `risk_reward_gross`, `risk_reward_net` (net of round-trip txn costs)
+- `affordable`, `cap_breached`, `open_risk_breached`, `rejection_reason`
+
+### India data layer (`dataflows/india/`)
+
+| Module | What it provides |
+|---|---|
+| `nse_client.py` | NSE public endpoints: quote, F&O ban list, bulk/block deals, index snapshots. Browser-UA + retry + on-disk cache. Falls back to yfinance with explicit "unavailable" strings. |
+| `flows.py` | FII/DII daily net cash-market figures for the last 10 sessions. |
+| `shareholding.py` | Promoter holding %, pledge %, quarter-over-quarter FII/DII holding change. |
+| `corporate_actions.py` | Upcoming ex-dates, board meetings, results dates. |
+| `india_news.py` | RSS feeds (MoneyControl, ET Markets, Business Standard, LiveMint) + company-name keyword filter. |
+| `market_calendar.py` | NSE holiday list, 09:15–15:30 IST session, monthly F&O expiry, `market_status()` for the `routine` command. |
+
+The market profile resolver in `dataflows/interface.py` auto-upgrades `fundamental_data` → `india_composite` and `news_data` → `india_news` when the ticker ends in `.NS` or `.BO`.
+
+Every agent receives an **India instrument context block** with: symbol, sector, index membership, currency (INR), F&O lot size, ban-list status, circuit band, market hours, next holiday, next results date, settlement cycle (T+1), and tax footnote (STCG, STT). This block prevents an entire class of LLM errors (dollar signs, US hours, fabricated levels, ignoring circuits).
+
+---
+
+## Python API
 
 ```python
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.default_config import DEFAULT_CONFIG
 
+# Standard analysis
 ta = TradingAgentsGraph(debug=True, config=DEFAULT_CONFIG.copy())
-
-# forward propagate
-_, decision = ta.propagate("NVDA", "2026-01-15")
+_, decision = ta.propagate("RELIANCE.NS", "2026-06-10")
 print(decision)
+
+# Custom config
+config = DEFAULT_CONFIG.copy()
+config["llm_provider"] = "anthropic"
+config["deep_think_llm"] = "claude-opus-4-8"
+config["quick_think_llm"] = "claude-haiku-4-5-20251001"
+config["market_profile"] = "india"
+config["temperature"] = 0.2
+config["max_debate_rounds"] = 1
+config["pipeline"] = "light"          # skip debates for faster/cheaper runs
+
+ta = TradingAgentsGraph(
+    selected_analysts=["market", "news", "fundamentals"],
+    config=config,
+    debug=False,
+)
+_, decision = ta.propagate("TCS.NS", "2026-06-10")
 ```
 
-You can also adjust the default configuration to set your own choice of LLMs, debate rounds, etc.
+### Position sizing (standalone)
 
 ```python
-from tradingagents.graph.trading_graph import TradingAgentsGraph
-from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.risk.position_sizing import size_position
+from tradingagents.agents.schemas import TradeSignal, EntryLevel, TakeProfit
 
-config = DEFAULT_CONFIG.copy()
-config["llm_provider"] = "openai"        # openai, google, anthropic, xai, deepseek, qwen, qwen-cn, glm, glm-cn, minimax, minimax-cn, openrouter, ollama, azure
-config["deep_think_llm"] = "gpt-5.5"     # Model for complex reasoning
-config["quick_think_llm"] = "gpt-5.4-mini" # Model for quick tasks
-config["max_debate_rounds"] = 2
+signal = TradeSignal(
+    direction="LONG",
+    setup_type="pullback-to-50SMA",
+    timeframe="swing 5–20 sessions",
+    entries=[EntryLevel(label="EP1", price=2852, allocation_pct=100, trigger="limit", rationale="support retest")],
+    stop_loss=2778,
+    stop_basis="below swing low",
+    take_profits=[TakeProfit(label="TP1", price=2960, exit_pct=50, basis="prior swing high"),
+                  TakeProfit(label="TP2", price=3080, exit_pct=50, basis="weekly supply")],
+    invalidation="daily close below 2750",
+    confidence="medium",
+)
 
-ta = TradingAgentsGraph(debug=True, config=config)
-_, decision = ta.propagate("NVDA", "2026-01-15")
-print(decision)
+result = size_position(
+    signal=signal,
+    account_equity=1_000_000,
+    risk_pct_per_trade=1.0,
+    open_portfolio_risk_pct=2.0,
+    max_open_risk_pct=6.0,
+    max_position_pct=15.0,
+    min_risk_reward=1.8,
+    txn_cost_pct_round_trip=0.5,
+)
+
+print(result.format_ticket("RELIANCE.NS", signal))
+# SIGNAL — RELIANCE.NS — LONG — swing 5–20 sessions
+# EP1 ₹2,852 (100%) limit
+# SL  ₹2,778  (below swing low)
+# TP1 ₹2,960 (50% off) | TP2 ₹3,080 (50% off)
+# Qty 135 | Capital ₹3.85L (38.5% of equity) | Risk ₹9,990 (1.00%) | RR 1.92 (net)
+# Expected ₹ P&L at TP1: ₹14,580 gross / ₹5,355 net (after ~0.5% round-trip costs)
 ```
 
-See `tradingagents/default_config.py` for all configuration options.
+---
 
-## Persistence and Recovery
+## Persistence
 
-TradingAgents persists two kinds of state across runs.
+### Decision log / reflection
 
-### Decision log
+Always on. Each completed run appends its decision to `~/.tradingagents/memory/trading_memory.md`. On the next run for the same ticker, the system fetches realized return, computes alpha vs the regional benchmark (Nifty 50 for `.NS`, Sensex for `.BO`, SPY for US tickers), generates a reflection, and injects prior decisions into the Portfolio Manager prompt. `positions close` also writes realized R-multiples into this log.
 
-The decision log is always on. Each completed run appends its decision to `~/.tradingagents/memory/trading_memory.md`. On the next run for the same ticker, TradingAgents fetches the realised return (raw and alpha vs SPY), generates a one-paragraph reflection, and injects the most recent same-ticker decisions plus recent cross-ticker lessons into the Portfolio Manager prompt, so each analysis carries forward what worked and what didn't.
-
-Override the path with `TRADINGAGENTS_MEMORY_LOG_PATH`.
+Override with `TRADINGAGENTS_MEMORY_LOG_PATH`.
 
 ### Checkpoint resume
 
-Checkpoint resume is opt-in via `--checkpoint`. When enabled, LangGraph saves state after each node so a crashed or interrupted run resumes from the last successful step instead of starting over. On a resume run you will see `Resuming from step N for <TICKER> on <date>` in the logs; on a new run you will see `Starting fresh`. Checkpoints are cleared automatically on successful completion.
-
-Per-ticker SQLite databases live at `~/.tradingagents/cache/checkpoints/<TICKER>.db` (override the base with `TRADINGAGENTS_CACHE_DIR`). Use `--clear-checkpoints` to reset all of them before a run.
-
 ```bash
-tradingagents analyze --checkpoint           # enable for this run
-tradingagents analyze --clear-checkpoints    # reset before running
+tradingagents analyze --checkpoint         # save state after each node
+tradingagents analyze --clear-checkpoints  # reset all checkpoints first
 ```
 
-```python
-config = DEFAULT_CONFIG.copy()
-config["checkpoint_enabled"] = True
-ta = TradingAgentsGraph(config=config)
-_, decision = ta.propagate("NVDA", "2026-01-15")
+Per-ticker SQLite checkpoints at `~/.tradingagents/cache/checkpoints/<TICKER>.db`. Override base with `TRADINGAGENTS_CACHE_DIR`.
+
+### Position store
+
+SQLite at `~/.tradingagents/portfolio.db`. Tables: `positions` (one row per trade) and `position_events` (fills, partial exits, SL moves, reviews, closes). The `positions` commands manage this store; the scan gate reads from it.
+
+---
+
+## Operating cadence
+
 ```
+After market close (15:30 IST)    tradingagents scan --top 5 [--run-analysis]
+After order fills                  tradingagents positions add / update
+Before market open (09:15 IST)    tradingagents positions review --all
+Weekly                            tradingagents positions close <finished>
+Intraday                          nothing (swing system)
+Holidays / weekends               nothing (no new data)
+```
+
+Run `tradingagents routine` to see the current recommendation based on IST time and your portfolio state.
+
+---
 
 ## Reproducibility
 
-TradingAgents is LLM-driven, so two runs of the same ticker and date can differ. This is expected for a research tool built on language models, not a defect. The variation comes from a few distinct sources, and it helps to separate them.
-
-Language model sampling is non-deterministic. Even at a fixed temperature, providers do not guarantee byte-identical output across calls, and reasoning models (the default GPT-5.x family, and any thinking-mode model) vary the most because their internal reasoning is itself sampled.
-
-Live data moves. News, StockTwits, and Reddit return different content as time passes, so a run today sees different inputs than a run last week even for the same historical trade date. Pin the analysis date to hold the price and indicator window fixed, but the social and news sources still reflect "now".
-
-To reduce variation you can lower the sampling temperature. Set `temperature` in your config (or `TRADINGAGENTS_TEMPERATURE` in `.env`); lower values make models that honor it more repeatable. Reasoning models largely ignore temperature, so for tighter reproducibility pair a low temperature with a non-reasoning model such as `gpt-4.1`.
+LLM-driven analysis is non-deterministic by design. Two identical runs can differ. To reduce variation:
 
 ```python
-config = DEFAULT_CONFIG.copy()
-config["llm_provider"] = "openai"
-config["deep_think_llm"] = "gpt-4.1"      # non-reasoning model honors temperature
-config["quick_think_llm"] = "gpt-4.1"
-config["temperature"] = 0.0
+config["temperature"] = 0.2   # or lowest non-zero value your provider accepts
+config["deep_think_llm"] = "gpt-4.1"   # non-reasoning models honor temperature better
 ```
 
-What does not vary anymore: the analyzed company identity is resolved deterministically from the ticker before any agent runs, and the market analyst grounds exact price and indicator claims in a verified data snapshot. Earlier reports of "different companies" or fabricated price levels across runs are addressed by these two mechanisms.
+What is deterministic: ticker identity resolution, price/indicator data (pinned to `analysis_date`), position sizing calculations, signal validator checks. Live data sources (news, Reddit, NSE flows) reflect the moment of the call.
 
-Backtest results are not guaranteed to match any published figure. Returns depend on the model, the temperature, the date range, data quality, and the sampling above. Treat the framework as a research scaffold for studying multi-agent analysis, not as a strategy with a fixed, replicable return.
+---
 
 ## Contributing
 
-Contributions are welcome: bug fixes, documentation, and feature ideas; past contributions are credited per release in [`CHANGELOG.md`](CHANGELOG.md).
+Bug fixes, documentation, and feature ideas are welcome. See [`CHANGELOG.md`](CHANGELOG.md) for prior contributions.
+
+---
 
 ## Citation
-
-Please reference our work if you find *TradingAgents* provides you with some help :)
 
 ```
 @misc{xiao2025tradingagentsmultiagentsllmfinancial,
