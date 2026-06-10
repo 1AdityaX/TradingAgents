@@ -132,7 +132,11 @@ class TradingAgentsGraph:
         self.log_states_dict = {}  # date to full state dict
 
         # Set up the new-trade graph.
-        self.workflow = self.graph_setup.setup_graph(selected_analysts)
+        # Phase 8: "light" pipeline skips both debate stages to reduce LLM cost.
+        if self.config.get("pipeline", "full") == "light":
+            self.workflow = self.graph_setup.setup_light_graph(selected_analysts)
+        else:
+            self.workflow = self.graph_setup.setup_graph(selected_analysts)
         self.graph = self.workflow.compile()
         self._checkpointer_ctx = None
 

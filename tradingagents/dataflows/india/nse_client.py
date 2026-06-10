@@ -16,6 +16,7 @@ import hashlib
 import json
 import logging
 import os
+import threading
 import time
 from datetime import date, datetime
 from typing import Optional
@@ -44,6 +45,25 @@ _CACHE_TTL = 4 * 3600  # seconds; stale-within-session is fine for swing trades
 
 # Module-level session; None until first use.
 _session: Optional[requests.Session] = None
+
+# ---------------------------------------------------------------------------
+# Per-request throttle — prevents aggressive scraping that triggers NSE bans.
+# Min 1 second between actual HTTP requests; cache hits bypass this.
+# ---------------------------------------------------------------------------
+_throttle_lock = threading.Lock()
+_last_request_ts: float = 0.0
+_MIN_REQUEST_INTERVAL = 1.0  # seconds
+
+
+def _throttle() -> None:
+    """Block until the minimum inter-request interval has elapsed."""
+    global _last_request_ts
+    with _throttle_lock:
+        now = time.monotonic()
+        wait = _MIN_REQUEST_INTERVAL - (now - _last_request_ts)
+        if wait > 0:
+            time.sleep(wait)
+        _last_request_ts = time.monotonic()
 
 # yfinance ticker symbols for major Indian indices (fallback path)
 _INDEX_YF_MAP = {
@@ -115,10 +135,15 @@ def _get_session() -> requests.Session:
 
 
 def _fetch_nse(endpoint: str, params: Optional[dict] = None) -> Optional[dict]:
-    """GET a JSON endpoint on nseindia.com; return parsed dict or None on error."""
+    """GET a JSON endpoint on nseindia.com; return parsed dict or None on error.
+
+    Applies a per-request throttle (≥1 s between requests) before each
+    attempt so we never hammer NSE's servers and trigger a ban.
+    """
     url = f"{_NSE_BASE}{endpoint}"
     for attempt in range(3):
         try:
+            _throttle()
             resp = _get_session().get(url, params=params, timeout=15)
             if resp.status_code == 200:
                 return resp.json()

@@ -166,3 +166,77 @@ class GraphSetup:
         workflow.add_edge("Portfolio Manager", END)
 
         return workflow
+
+    def setup_light_graph(
+        self, selected_analysts=None
+    ):
+        """Light pipeline: analysts → Trader → Signal Validator → Portfolio Manager.
+
+        Skips both the research debate (Bull/Bear/Research Manager) and the risk
+        debate (Aggressive/Conservative/Neutral). Cuts token cost by ~60–70%.
+        Intended for Phase 8 small-account mode where LLM spend is tightly capped.
+
+        The Portfolio Manager receives the same validated signal ticket as in the
+        full pipeline; it just doesn't have a debate history to synthesise — the
+        analyst reports and trader plan are its sole inputs.
+        """
+        if selected_analysts is None:
+            selected_analysts = ["market"]
+
+        plan = build_analyst_execution_plan(
+            selected_analysts,
+            concurrency_limit=self.analyst_concurrency_limit,
+        )
+
+        analyst_factories = {
+            "market": lambda: create_market_analyst(self.quick_thinking_llm),
+            "social": lambda: create_sentiment_analyst(self.quick_thinking_llm),
+            "news": lambda: create_news_analyst(self.quick_thinking_llm),
+            "fundamentals": lambda: create_fundamentals_analyst(self.quick_thinking_llm),
+        }
+
+        trader_node = create_trader(self.quick_thinking_llm)
+        signal_validator_node = create_signal_validator()
+        # Use quick_thinking_llm for PM in light mode (cost reduction goal)
+        portfolio_manager_node = create_portfolio_manager(self.quick_thinking_llm)
+
+        workflow = StateGraph(AgentState)
+
+        for spec in plan.specs:
+            workflow.add_node(spec.agent_node, analyst_factories[spec.key]())
+            workflow.add_node(spec.clear_node, create_msg_delete())
+            workflow.add_node(spec.tool_node, self.tool_nodes[spec.key])
+
+        workflow.add_node("Trader", trader_node)
+        workflow.add_node("Signal Validator", signal_validator_node)
+        workflow.add_node("Portfolio Manager", portfolio_manager_node)
+
+        # START → first analyst
+        workflow.add_edge(START, plan.specs[0].agent_node)
+
+        for i, spec in enumerate(plan.specs):
+            workflow.add_conditional_edges(
+                spec.agent_node,
+                getattr(self.conditional_logic, f"should_continue_{spec.key}"),
+                [spec.tool_node, spec.clear_node],
+            )
+            workflow.add_edge(spec.tool_node, spec.agent_node)
+            if i < len(plan.specs) - 1:
+                workflow.add_edge(spec.clear_node, plan.specs[i + 1].agent_node)
+            else:
+                # Last analyst → Trader directly (no debate)
+                workflow.add_edge(spec.clear_node, "Trader")
+
+        workflow.add_edge("Trader", "Signal Validator")
+        # Map "Aggressive Analyst" → "Portfolio Manager" to skip the risk debate
+        workflow.add_conditional_edges(
+            "Signal Validator",
+            self.conditional_logic.should_continue_after_validation,
+            {
+                "Aggressive Analyst": "Portfolio Manager",
+                "Trader": "Trader",
+            },
+        )
+        workflow.add_edge("Portfolio Manager", END)
+
+        return workflow

@@ -41,14 +41,32 @@ Volatility Indicators:
 - boll: Bollinger Middle: A 20 SMA serving as the basis for Bollinger Bands. Usage: Acts as a dynamic benchmark for price movement. Tips: Combine with the upper and lower bands to effectively spot breakouts or reversals.
 - boll_ub: Bollinger Upper Band: Typically 2 standard deviations above the middle line. Usage: Signals potential overbought conditions and breakout zones. Tips: Confirm signals with other tools; prices may ride the band in strong trends.
 - boll_lb: Bollinger Lower Band: Typically 2 standard deviations below the middle line. Usage: Indicates potential oversold conditions. Tips: Use additional analysis to avoid false reversal signals.
-- atr: ATR: Averages true range to measure volatility. Usage: Set stop-loss levels and adjust position sizes based on current market volatility. Tips: It's a reactive measure, so use it as part of a broader risk management strategy.
+- atr: ATR(14): Averages true range over 14 periods to measure volatility. **MANDATORY — always include `atr` in every analysis.** The downstream Signal Validator uses it to check stop-loss placement and position sizing. Usage: Set stop-loss levels and adjust position sizes based on current market volatility. Report the ATR(14) value explicitly in your report and LEVELS table.
 
 Volume-Based Indicators:
 - vwma: VWMA: A moving average weighted by volume. Usage: Confirm trends by integrating price action with volume data. Tips: Watch for skewed results from volume spikes; use in combination with other volume analyses.
 
-- Select indicators that provide diverse and complementary information. Avoid redundancy (e.g., do not select both rsi and stochrsi). Also briefly explain why they are suitable for the given market context. When you tool call, please use the exact name of the indicators provided above as they are defined parameters, otherwise your call will fail. Please make sure to call get_stock_data first to retrieve the CSV that is needed to generate indicators. Then use get_indicators with the specific indicator names.
+- Select indicators that provide diverse and complementary information. Avoid redundancy (e.g., do not select both rsi and stochrsi). Also briefly explain why they are suitable for the given market context. When you tool call, please use the exact name of the indicators provided above as they are defined parameters, otherwise your call will fail. Please make sure to call get_stock_data first to retrieve the CSV that is needed to generate indicators. Then use get_indicators with the specific indicator names. **You MUST always include `atr` (ATR-14) in your indicator selection.**
 
 Before writing the final report, call get_verified_market_snapshot for this ticker and the current date, and treat it as the source of truth for any exact OHLCV, price-level, or indicator-value claim. If another tool's output conflicts with the verified snapshot, flag the discrepancy rather than inventing a reconciled number. Do not claim historical validation, support/resistance bounces, or exact percentage moves unless they are directly supported by tool output with concrete dates and prices.
+
+**PRICE LEVEL DISCIPLINE — MANDATORY:**
+Every support and resistance level you identify MUST:
+1. Include the exact price from tool output (not a round approximation).
+2. Include the date(s) when that level was set (e.g., swing low on 2026-03-14).
+3. State the number of times price has touched/respected it (strength).
+Do NOT invent levels based on round numbers or pattern familiarity — every level must trace to a specific bar in the data.
+
+**MANDATORY OUTPUT: LEVELS TABLE**
+At the end of your report you MUST include a dedicated `## LEVELS` section with a markdown table in exactly this format:
+
+| Type | Price | Date(s) Established | Strength (touches) | Notes |
+|------|-------|--------------------|--------------------|-------|
+| Support | ₹XXX.XX | YYYY-MM-DD | N touches | brief note |
+| Resistance | ₹XXX.XX | YYYY-MM-DD | N touches | brief note |
+| ATR(14) | ₹XX.XX | as of {current_date} | — | used for SL/TP sizing |
+
+**The Trader downstream is ONLY permitted to use prices from this LEVELS table** (optionally adjusted by a stated fraction of ATR(14)). An incomplete or missing LEVELS table causes the entire analysis to fail.
 
 Write a very detailed and nuanced report of the trends you observe. Provide specific, actionable insights with supporting evidence to help traders make informed decisions."""
             + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""

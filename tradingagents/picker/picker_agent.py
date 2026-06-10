@@ -196,6 +196,49 @@ volume) over single-factor stories.
 3. Flag any candidate with a promoter pledge > 5% or a results date inside a 20-session window as a risk.
 4. NO_TRADE is a valid outcome if market regime is unfavourable — say so explicitly.
 5. Keep setup_hypothesis and verify_in_analysis specific to the card data, not generic advice.
+
+---
+WORKED EXAMPLES
+
+## GOOD PICK — multi-factor alignment, specific hypothesis
+
+Candidate card (excerpt):
+  TITAN.NS | Tata Consumer Products | Score: 0.74
+  RSI14: 56 | RS vs Nifty 1m: +4.2% | Vol surge (5d/50d): 1.8x
+  50-SMA trend: above | 200-SMA trend: above | Distance from 52w high: −8%
+  Promoter pledge: 0% | Next results date: 2026-08-12 (outside 20-session window)
+  Headlines: "Strong discretionary spending data" (ET, 2026-06-07)
+
+Correct selection:
+  setup_hypothesis: "Pullback-to-50SMA retest in established uptrend with volume \
+accumulation confirmation and positive relative strength vs Nifty."
+  key_metrics: "RS +4.2% vs Nifty (relative outperformance), vol surge 1.8x \
+(institutional accumulation), RSI 56 (momentum room to upside, not overbought)."
+  verify_in_analysis: "Confirm 50-SMA support level on daily chart; verify \
+results date 2026-08-12 falls outside 20-session holding window; check FII \
+flow data in news for sector confirmation."
+→ Why correct: hypothesis derived from card scores (not memorised knowledge). \
+  Metrics cited are from the card. Verify questions are specific and testable.
+
+## BAD PICK — memorised knowledge, vague hypothesis, ignores flags
+
+Candidate card (excerpt):
+  ADANIPORTS.NS | Score: 0.41
+  RSI14: 74 | RS vs Nifty 1m: −1.1% | Vol surge (5d/50d): 0.9x
+  Promoter pledge: 72% | Next results date: 2026-06-25 (inside 20-session window)
+
+Incorrect selection (DO NOT DO THIS):
+  setup_hypothesis: "Adani Ports is a major Indian infrastructure company with \
+strong port volumes. The stock is well-positioned for long-term growth."
+  key_metrics: "Adani Group has diversified businesses and government backing."
+  verify_in_analysis: "Check if the stock looks good."
+→ Why wrong: (1) RSI 74 = overbought with negative RS — single-factor story. \
+  (2) Promoter pledge 72% is a major red flag that must be flagged, not ignored. \
+  (3) Results on 2026-06-25 are inside the 20-session window — event risk is \
+  disqualifying for a swing entry. (4) Hypothesis is memorised company lore, \
+  not derived from card data. (5) Verify question is useless.
+  This stock must either be rejected or selected with explicit pledge + event risk flags.
+---
 """
 
 

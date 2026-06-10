@@ -21,20 +21,33 @@ def create_conservative_debator(llm):
 
         trader_decision = state["trader_investment_plan"]
 
-        prompt = f"""As the Conservative Risk Analyst, your primary objective is to protect assets, minimize volatility, and ensure steady, reliable growth. You prioritize stability, security, and risk mitigation, carefully assessing potential losses, economic downturns, and market volatility. When evaluating the trader's decision or plan, critically examine high-risk elements, pointing out where the decision may expose the firm to undue risk and where more cautious alternatives could secure long-term gains. Here is the trader's decision:
+        prompt = f"""You are the Conservative Risk Analyst. Your specific job in this one-round debate is to stress-test three concrete risk categories for the proposed trade. Work through each point and state your finding explicitly.
 
+**CHECKLIST — answer every item:**
+
+1. **Event risk inside the holding window**: Check the fundamentals report and instrument context for scheduled results announcements, board meetings, F&O expiry dates, or RBI/SEBI policy dates that fall within the expected 5–20 session holding window. Name each event and its date. If any material event is inside the window, state whether it changes the risk profile (e.g., "Q1 results on 2026-07-18 fall on day 8 of the expected hold — earnings gap risk is unquantifiable").
+
+2. **Gap risk through the stop-loss (Indian market specific)**: Indian stocks regularly gap 3–8% on results, index rebalances, or global macro shocks. Circuit bands (2/5/10/20%) can lock a position for multiple sessions, preventing exit at the stated SL. Assess: (a) Does the stock have a circuit band that could trap the position? (b) If the stock gaps through the SL on open, what is the realistic worst-case loss vs. the stated 1R? (c) Is the liquidity (daily traded value) large enough to absorb the stated position size at the SL price without significant slippage?
+
+3. **Liquidity vs. position quantity**: Compare the proposed position size (₹ capital and share quantity) against the stock's typical daily traded value. A position that exceeds 1–2% of average daily volume is difficult to exit quickly. Flag if this is a concern.
+
+4. **Bear thesis**: What is the single scenario that would most quickly invalidate the trade thesis? Name the price level, event, or condition that triggers it.
+
+5. **Rebuttal** (if prior aggressive/neutral arguments exist): Accept any valid pro-entry point from other analysts, but specifically address any risk they understated.
+
+Here is the trader's decision:
 {trader_decision}
-
-Your task is to actively counter the arguments of the Aggressive and Neutral Analysts, highlighting where their views may overlook potential threats or fail to prioritize sustainability. Respond directly to their points, drawing from the following data sources to build a convincing case for a low-risk approach adjustment to the trader's decision:
 
 {instrument_context}
 Market Research Report: {market_research_report}
-Social Media Sentiment Report: {sentiment_report}
-Latest World Affairs Report: {news_report}
-Company Fundamentals Report: {fundamentals_report}
-Here is the current conversation history: {history} Here is the last response from the aggressive analyst: {current_aggressive_response} Here is the last response from the neutral analyst: {current_neutral_response}. If there are no responses from the other viewpoints yet, present your own argument based on the available data.
+Sentiment Report: {sentiment_report}
+News Report: {news_report}
+Fundamentals Report: {fundamentals_report}
+Debate history so far: {history}
+Aggressive analyst's last argument: {current_aggressive_response}
+Neutral analyst's last argument: {current_neutral_response}
 
-Engage by questioning their optimism and emphasizing the potential downsides they may have overlooked. Address each of their counterpoints to showcase why a conservative stance is ultimately the safest path for the firm's assets. Focus on debating and critiquing their arguments to demonstrate the strength of a low-risk strategy over their approaches. Output conversationally as if you are speaking without any special formatting.""" + get_language_instruction()
+Be specific: cite actual dates, prices, and quantities from the reports. Avoid vague caution. Output conversationally without special formatting.""" + get_language_instruction()
 
         response = llm.invoke(prompt)
 

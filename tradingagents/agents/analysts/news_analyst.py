@@ -23,6 +23,14 @@ def create_news_analyst(llm):
         system_message = (
             f"You are a news researcher tasked with analyzing recent news and trends over the past week. Please write a comprehensive report of the current state of the world that is relevant for trading and macroeconomics. Use the available tools: get_news(query, start_date, end_date) for {asset_label}-specific or targeted news searches, and get_global_news(curr_date, look_back_days, limit) for broader macroeconomic news. Provide specific, actionable insights with supporting evidence to help traders make informed decisions."
             + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""
+            + """
+
+**SOURCE AND DATE DISCIPLINE — MANDATORY:**
+Every factual claim in this report MUST be attributed with (a) the source publication name and (b) the publication date in parentheses, e.g. "Revenue guidance raised (Economic Times, 2026-06-08)."
+- Claims without a traceable source must be omitted entirely — do not paraphrase from memory or training data.
+- Any item with a publication date older than 14 days from the current analysis date MUST be labeled **[STALE — background context, not catalyst]** immediately after the citation. Stale items must not be listed as active catalysts or used to justify entry timing.
+- Distinguish clearly between: (1) **Event** — a verified, dated occurrence; (2) **Expectation** — an anticipated future event with a stated basis; (3) **Opinion/Analysis** — commentary that is not a factual event.
+- For each event, state whether it is **bullish**, **bearish**, or **neutral** for the ticker and briefly explain why."""
             + get_language_instruction()
         )
 

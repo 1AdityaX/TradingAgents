@@ -1,4 +1,6 @@
+import json
 import os
+from pathlib import Path
 
 _TRADINGAGENTS_HOME = os.path.join(os.path.expanduser("~"), ".tradingagents")
 
@@ -30,7 +32,68 @@ _ENV_OVERRIDES = {
     # Phase 3 — universe
     "TRADINGAGENTS_UNIVERSE":                 "universe",
     "TRADINGAGENTS_UNIVERSE_MAX_AGE_DAYS":    "universe_max_age_days",
+    # Phase 8 — small-account mode
+    "TRADINGAGENTS_ACCOUNT_PROFILE":          "account_profile",
+    "TRADINGAGENTS_MAX_CONCURRENT_POSITIONS": "max_concurrent_positions",
+    "TRADINGAGENTS_PIPELINE":                 "pipeline",
+    "TRADINGAGENTS_MONTHLY_LLM_BUDGET_INR":   "monthly_llm_budget_inr",
+    "TRADINGAGENTS_SCAN_CADENCE":             "scan_cadence",
 }
+
+
+# Phase 8 — account profile presets
+# Each preset overrides only the keys that differ from standard defaults.
+# Env vars always take precedence over profile presets (applied last).
+_ACCOUNT_PROFILES: dict = {
+    "small": {
+        # Universe: only stocks affordable enough to buy at least 1 share
+        "max_stock_price": 500,
+        # Position sizing: allow the full account in a single position
+        # (diversification is mathematically unavailable at this size)
+        "max_position_pct": 100.0,
+        "max_concurrent_positions": 2,
+        # Risk per trade: slightly higher % since we can't spread across many positions
+        "risk_pct_per_trade": 2.0,
+        # Portfolio risk cap: lower than standard since we're heavily concentrated
+        "max_open_risk_pct": 4.0,
+        # LLM pipeline: cheapest path (Market Analyst → Trader → Validator → PM)
+        "pipeline": "light",
+        # Budget cap: ~₹300/month ≈ 1–3% of ₹10k–30k capital
+        "monthly_llm_budget_inr": 300,
+        # Cadence: weekly scan (one position slot means daily scans are mostly wasted)
+        "scan_cadence": "weekly",
+    },
+}
+
+
+def _load_saved_profile() -> dict:
+    """Load user-persisted profile overrides from ~/.tradingagents/profile.json.
+
+    Written by the 'profile set' CLI command. Returns an empty dict if the file
+    does not exist or cannot be parsed.
+    """
+    profile_path = Path(_TRADINGAGENTS_HOME) / "profile.json"
+    if profile_path.exists():
+        try:
+            return json.loads(profile_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def _apply_account_profile(config: dict) -> dict:
+    """Overlay account-profile preset values onto config (in-place).
+
+    Profile values only fill keys that are still at their base default — they
+    do NOT stomp explicit user overrides coming from env vars. Env overrides are
+    applied separately in _apply_env_overrides(), which is called after this.
+    """
+    profile = config.get("account_profile", "standard")
+    preset = _ACCOUNT_PROFILES.get(profile)
+    if preset:
+        for key, value in preset.items():
+            config[key] = value
+    return config
 
 
 def _coerce(value: str, reference):
@@ -54,7 +117,11 @@ def _apply_env_overrides(config: dict) -> dict:
     return config
 
 
-DEFAULT_CONFIG = _apply_env_overrides({
+def _build_default_config() -> dict:
+    """Build DEFAULT_CONFIG with the correct precedence order:
+    base defaults → saved profile.json → account_profile preset → env overrides.
+    """
+    config = {
     "project_dir": os.path.abspath(os.path.join(os.path.dirname(__file__), ".")),
     "results_dir": os.getenv("TRADINGAGENTS_RESULTS_DIR", os.path.join(_TRADINGAGENTS_HOME, "logs")),
     "data_cache_dir": os.getenv("TRADINGAGENTS_CACHE_DIR", os.path.join(_TRADINGAGENTS_HOME, "cache")),
@@ -81,6 +148,14 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # each provider at its own default. Lower values reduce run-to-run
     # variation on models that honor it; reasoning models largely ignore it
     # and no setting makes LLM output bit-identical across runs (see README).
+    #
+    # Phase 5 recommendation: set temperature=0.2 (or the lowest non-zero value
+    # your provider accepts) for the Trader and Portfolio Manager specifically.
+    # These agents produce structured price levels and binary decisions — lower
+    # temperature reduces invented numbers and rating drift across runs.
+    # Analyst agents (Market, News, Fundamentals, Sentiment) can use slightly
+    # higher values (0.3–0.5) because narrative diversity is acceptable there.
+    # Set via env var: TRADINGAGENTS_TEMPERATURE=0.2
     "temperature": None,
     # Checkpoint/resume: when True, LangGraph saves state after each node
     # so a crashed run can resume from the last successful step.
@@ -88,7 +163,13 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # Output language for analyst reports and final decision
     # Internal agent debate stays in English for reasoning quality
     "output_language": "English",
-    # Debate and discussion settings
+    # Debate and discussion settings.
+    # Phase 5 recommendation: keep max_debate_rounds=1 (default). Each risk
+    # analyst now has a distinct, focused checklist (Aggressive: expectancy;
+    # Conservative: event/gap/liquidity risk; Neutral: scenario tree). A single
+    # round of focused checklists produces more actionable output than multiple
+    # rounds of open-ended debate. Increasing this adds token cost without
+    # proportional quality gain for structured-output pipelines.
     "max_debate_rounds": 1,
     "max_risk_discuss_rounds": 1,
     "max_recur_limit": 100,
@@ -185,4 +266,45 @@ DEFAULT_CONFIG = _apply_env_overrides({
         ".SZ":  "399001.SZ",   # Shenzhen (SZSE Component)
         "":     "SPY",         # default for US-listed tickers (no suffix)
     },
-})
+    # Phase 8 — small-account mode
+    # account_profile: "standard" (default) | "small" (≤ ~₹50k equity).
+    # Setting "small" activates the preset in _ACCOUNT_PROFILES above.
+    # Individual keys in the preset can still be overridden by env vars.
+    "account_profile": "standard",
+    # max_concurrent_positions: None = unlimited; 2 for small accounts.
+    # Scan is blocked when open positions >= this limit (same as open-risk gate).
+    "max_concurrent_positions": None,
+    # pipeline: "full" runs the complete debate graph (Bull/Bear + risk team).
+    # "light" runs Market Analyst → Trader → Signal Validator → Portfolio Manager
+    # only, skipping both debate stages. Cuts token cost by ~60–70%.
+    "pipeline": "full",
+    # monthly_llm_budget_inr: None = no cap. When set, the CLI warns at 80%
+    # and alerts at 100%. LLM spend should not exceed ~2–3% of equity/month.
+    "monthly_llm_budget_inr": None,
+    # scan_cadence: "daily" | "weekly". With "weekly", the CLI warns when a
+    # scan is attempted within 7 days of the last one. Small accounts have at
+    # most 1–2 position slots, so daily scans are mostly wasted compute.
+    "scan_cadence": "daily",
+    }
+
+    # Layer 2: merge user-persisted profile (written by 'profile set' command)
+    saved = _load_saved_profile()
+    config.update(saved)
+
+    # Layer 3: resolve account_profile env var FIRST so the preset lookup uses
+    # the correct profile name (chicken-and-egg: need the value to pick the preset)
+    profile_raw = os.environ.get("TRADINGAGENTS_ACCOUNT_PROFILE")
+    if profile_raw:
+        config["account_profile"] = profile_raw
+
+    # Layer 4: apply account-profile preset (e.g. "small" fills several keys at once)
+    _apply_account_profile(config)
+
+    # Layer 5: full env-var pass — applies all overrides, so individual preset
+    # keys the user explicitly set via env vars always take final precedence.
+    _apply_env_overrides(config)
+
+    return config
+
+
+DEFAULT_CONFIG = _build_default_config()

@@ -74,6 +74,9 @@ class Propagator:
             "fundamentals_report": "",
             "sentiment_report": "",
             "news_report": "",
+            # Populated by Research Manager in full pipeline; pre-set to "" so
+            # the Portfolio Manager doesn't KeyError in light mode (Phase 8).
+            "investment_plan": "",
             # Phase 2 — trade signal engine initial values
             "trade_signal": None,
             "signal_validation_result": None,

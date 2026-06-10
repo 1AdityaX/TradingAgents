@@ -64,12 +64,19 @@ def create_portfolio_manager(llm):
 
         # PM checklist prompt
         checklist = (
-            "Decision checklist (work through in order):\n"
-            "1. Signal Validator passed? (Yes — validator already forced NO_TRADE if not)\n"
-            "2. Are event risks listed in the signal ticket acceptable within the holding window?\n"
-            "3. Do portfolio caps remain respected? (capital %, open risk %)\n"
-            "4. Approve → Buy/Overweight | Modify (flag concern) → Hold/Overweight | "
-            "Reject → Hold/Underweight/Sell. Name the specific failed check if rejecting."
+            "Decision checklist — work through in order, stop at the first failed check:\n"
+            "1. Signal Validator passed? (Yes — validator already forced NO_TRADE if not. "
+            "If forced NO_TRADE, your decision must be Hold/Underweight/Sell.)\n"
+            "2. Are event risks listed in the signal ticket acceptable within the holding window? "
+            "Name each event and state whether it is tolerable (e.g., 'results on day 12 — "
+            "acceptable, will exit 50% before if TP1 unhit') or disqualifying.\n"
+            "3. Do portfolio caps remain respected? State the current open risk % after adding "
+            "this trade and confirm it is within the configured max_open_risk_pct. State the "
+            "capital % this position would represent.\n"
+            "4. Final decision: Approve → **Buy/Overweight** | Concern but proceed → "
+            "**Hold/Overweight** | Failed a check → **Hold/Underweight/Sell**. "
+            "You MUST name the specific check number that failed when downgrading. "
+            "Do not use vague phrases like 'some risk exists' — name the exact check."
         )
 
         prompt = f"""As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.

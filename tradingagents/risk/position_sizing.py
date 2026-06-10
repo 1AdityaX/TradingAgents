@@ -58,8 +58,18 @@ class PositionSizingResult:
     def is_valid(self) -> bool:
         return bool(self.affordable and not self.cap_breached and not self.open_risk_breached and not self.rejection_reason)
 
-    def format_ticket(self, ticker: str, signal: "TradeSignal") -> str:
-        """Render the complete executable signal ticket."""
+    def format_ticket(
+        self,
+        ticker: str,
+        signal: "TradeSignal",
+        txn_cost_pct: float = 0.5,
+    ) -> str:
+        """Render the complete executable signal ticket.
+
+        Phase 8 addition: shows expected ₹ P&L at TP1 gross and net of round-trip
+        transaction costs, so small-account users see the true economics of the trade
+        (e.g. ₹180 gross / ₹130 net on a 2-share position).
+        """
         if not self.affordable or signal.direction == "NO_TRADE":
             return f"SIGNAL — {ticker} — NO_TRADE\nReason: {self.rejection_reason or 'signal is NO_TRADE'}"
 
@@ -87,6 +97,20 @@ class PositionSizingResult:
                 f"RR {self.risk_reward_net:.2f} (net)"
             ),
         ]
+
+        # Phase 8: show expected ₹ P&L at TP1 gross vs net of transaction costs.
+        # This makes the economics visible on tiny positions (e.g. ₹180 gross / ₹130 net).
+        if signal.take_profits and self.qty > 0:
+            tp1_price = signal.take_profits[0].price
+            direction_sign = 1 if signal.direction == "LONG" else -1
+            gross_pnl = direction_sign * (tp1_price - self.avg_entry_price) * self.qty
+            txn_cost_inr = self.capital_inr * txn_cost_pct / 100.0
+            net_pnl = gross_pnl - txn_cost_inr
+            lines.append(
+                f"Expected ₹ P&L at TP1: ₹{gross_pnl:,.0f} gross / ₹{net_pnl:,.0f} net "
+                f"(after ~{txn_cost_pct:.1f}% round-trip costs)"
+            )
+
         if signal.event_risks:
             lines.append(f"Event risks: {'; '.join(signal.event_risks)}")
         return "\n".join(lines)

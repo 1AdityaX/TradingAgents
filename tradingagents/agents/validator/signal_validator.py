@@ -167,7 +167,7 @@ def _validate(
             "ticket": None,
         }
 
-    ticket = sizing.format_ticket(ticker, signal)
+    ticket = sizing.format_ticket(ticker, signal, txn_cost_pct=txn_cost)
     return {
         "valid": True,
         "forced_no_trade": False,

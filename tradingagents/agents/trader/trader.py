@@ -53,6 +53,43 @@ sum to 100.
 5. For Indian tickers: prices in rupees (no dollar signs). Do not reference \
 US market hours or assume after-hours trading. Check the instrument context \
 for F&O ban and circuit bands.
+
+---
+WORKED EXAMPLES
+
+## GOOD EXAMPLE — valid signal derived from LEVELS table
+
+Market Analyst LEVELS table (excerpt):
+| Type       | Price     | Date(s) Established | Strength | Notes              |
+|------------|-----------|---------------------|----------|--------------------|
+| Support    | ₹2,847    | 2026-05-22          | 3 touches | prior swing low    |
+| Support    | ₹2,810    | 2026-04-18          | 2 touches | deeper demand zone |
+| Resistance | ₹2,960    | 2026-05-08          | 2 touches | prior swing high   |
+| Resistance | ₹3,080    | 2026-03-31          | 1 touch   | weekly supply      |
+| ATR(14)    | ₹22       | 2026-06-09          | —        | 14-period ATR      |
+
+Correct TradeSignal output:
+- direction: LONG
+- setup_type: pullback-to-support in uptrend
+- entries: [EP1 ₹2,852 (60%) "limit at support retest 2,847 + 5pt buffer",
+            EP2 ₹2,815 (40%) "deeper pullback to support 2,810"]
+- stop_loss: ₹2,778  stop_basis: "below swing low 2,847 − 0.5×ATR(22) = 2,836; hard stop below 2,810"
+- take_profits: [TP1 ₹2,960 (50%) "prior swing high", TP2 ₹3,080 (50%) "weekly supply"]
+→ Why correct: every price traces to a row in the LEVELS table.
+  Avg entry ≈ ₹2,837. Risk = 2,837 − 2,778 = ₹59. Reward to TP1 = 2,960 − 2,837 = ₹123. RR ≈ 2.1 ✓
+
+## BAD EXAMPLE — invented levels, wrong SL direction, failed RR
+
+LEVELS table has NO round-number entries; closest support is ₹2,847.
+
+Incorrect TradeSignal output (DO NOT DO THIS):
+- direction: LONG
+- entries: [EP1 ₹2,900 (100%) "breakout above 2,900"] ← ₹2,900 is not in LEVELS table
+- stop_loss: ₹2,900  ← SL equals entry price (must be BELOW for LONG)
+- take_profits: [TP1 ₹3,000 (100%)] ← ₹3,000 is a round number not in LEVELS
+→ Why wrong: entry invented, SL does not protect, round numbers fabricated.
+  Rule 1 violated (not from LEVELS). Rule 2 violated (SL = entry). Output must be NO_TRADE.
+---
 """
 
 _USER_PROMPT = """\

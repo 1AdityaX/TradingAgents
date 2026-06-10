@@ -322,6 +322,25 @@ class PositionStore:
             ).fetchall()
         return [self._row_to_dict(r) for r in rows]
 
+    def get_open_position_count(self) -> int:
+        """Return the number of currently OPEN positions."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM positions WHERE status='OPEN'"
+            ).fetchone()
+        return row[0] if row else 0
+
+    def at_position_limit(self, max_concurrent: Optional[int]) -> bool:
+        """Return True when open positions have reached max_concurrent.
+
+        None means unlimited — always returns False in that case.
+        Used by the scan-gate to block new scans when all position slots are full
+        (Phase 8 small-account mode caps this at 2).
+        """
+        if max_concurrent is None:
+            return False
+        return self.get_open_position_count() >= max_concurrent
+
     def get_open_risk_pct(self, account_equity: float) -> float:
         """Compute total open risk across all OPEN positions as % of equity.
 

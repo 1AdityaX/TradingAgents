@@ -989,6 +989,10 @@ def format_tool_args(args, max_length=80) -> str:
     return result
 
 def run_analysis(checkpoint: bool = False):
+    # Phase 8: small-account framing (once) and budget check
+    _show_small_account_framing()
+    _check_llm_budget()
+
     # First get all user selections
     selections = get_user_selections()
 
@@ -1285,6 +1289,133 @@ def run_analysis(checkpoint: bool = False):
         display_complete_report(final_state)
 
 
+# ---------------------------------------------------------------------------
+# Phase 8 — small-account helpers (used by scan, analyze, and profile)
+# ---------------------------------------------------------------------------
+
+_SMALL_ACCOUNT_THRESHOLD_INR = 50_000
+_WELCOME_FLAG = Path(os.path.expanduser("~")) / ".tradingagents" / ".small_account_welcomed"
+_LAST_SCAN_FILE = Path(os.path.expanduser("~")) / ".tradingagents" / "last_scan.json"
+_PROFILE_FILE = Path(os.path.expanduser("~")) / ".tradingagents" / "profile.json"
+
+
+def _show_small_account_framing() -> None:
+    """Print a one-time framing message for small-account users.
+
+    Fires on first scan/analyze when account_equity_inr ≤ ₹50k or
+    account_profile == 'small'. Creates a flag file so it only prints once.
+    """
+    equity = DEFAULT_CONFIG.get("account_equity_inr", 1_000_000)
+    profile = DEFAULT_CONFIG.get("account_profile", "standard")
+    if equity > _SMALL_ACCOUNT_THRESHOLD_INR and profile != "small":
+        return
+    if _WELCOME_FLAG.exists():
+        return
+
+    _WELCOME_FLAG.parent.mkdir(parents=True, exist_ok=True)
+    _WELCOME_FLAG.touch()
+
+    console.print(Panel(
+        "[bold yellow]Small-Account Mode — Read This Once[/bold yellow]\n\n"
+        "At this account size the system's [bold]primary output is process and a "
+        "trade journal[/bold], not income.\n\n"
+        "[bold]What's different:[/bold]\n"
+        "  • Universe filtered to stocks ≤ ₹500 (so ≥ 1 share fits within risk caps)\n"
+        "  • Max 1–2 concurrent positions (diversification is mathematically unavailable)\n"
+        "  • Light pipeline: Market Analyst → Trader → Validator → PM (debates skipped)\n"
+        "  • Monthly LLM budget cap enforced — spend tracked at "
+        "[cyan]~/.tradingagents/llm_spend.json[/cyan]\n"
+        "  • Weekly scan cadence (one slot means daily scans are mostly wasted)\n\n"
+        "[bold]The asset that compounds:[/bold]\n"
+        "  The memory/reflection log you build now scales with your capital later.\n"
+        "  Every closed trade feeds realized R back into future decisions.\n\n"
+        "[bold]The biggest small-account failure:[/bold]\n"
+        "  Overtrading to make ₹10k feel meaningful.\n"
+        "  The weekly cadence and slot limit exist to prevent exactly that.\n\n"
+        "[dim]This message appears only once. "
+        "To see it again: rm ~/.tradingagents/.small_account_welcomed[/dim]",
+        title="Welcome — Small-Account Profile",
+        border_style="yellow",
+        padding=(1, 2),
+    ))
+
+
+def _check_llm_budget() -> None:
+    """Warn (or block) when the monthly LLM budget is close to or over the cap."""
+    budget = DEFAULT_CONFIG.get("monthly_llm_budget_inr")
+    if budget is None:
+        return
+    try:
+        from tradingagents.budget.spend_tracker import SpendTracker
+        status = SpendTracker().check_budget(float(budget))
+        if status["over_budget"]:
+            console.print(Panel(
+                f"[bold red]{status['message']}[/bold red]\n\n"
+                "LLM spend should not exceed ~2–3% of equity per month.\n"
+                "Consider waiting until next month or reducing analysis frequency.\n"
+                "To check spend history: [cyan]python -m cli.main profile[/cyan]",
+                title="LLM Budget Exceeded",
+                border_style="red",
+                padding=(1, 2),
+            ))
+            # Warn only — don't block; user may have a good reason to proceed.
+        elif status["warning"]:
+            console.print(Panel(
+                f"[yellow]{status['message']}[/yellow]\n"
+                "You have [bold]20% of your monthly LLM budget remaining[/bold].\n"
+                "Use [cyan]python -m cli.main profile[/cyan] to see the full breakdown.",
+                title="LLM Budget Warning",
+                border_style="yellow",
+                padding=(1, 2),
+            ))
+    except Exception:
+        pass  # best-effort
+
+
+def _enforce_scan_cadence() -> None:
+    """Warn when scan_cadence is 'weekly' and a scan ran within the last 7 days."""
+    cadence = DEFAULT_CONFIG.get("scan_cadence", "daily")
+    if cadence != "weekly":
+        return
+    try:
+        import json as _json
+        if _LAST_SCAN_FILE.exists():
+            data = _json.loads(_LAST_SCAN_FILE.read_text(encoding="utf-8"))
+            last_ts = data.get("last_scan")
+            if last_ts:
+                import datetime as _dt
+                last = _dt.datetime.fromisoformat(last_ts)
+                days_ago = (_dt.datetime.now() - last).days
+                if days_ago < 7:
+                    console.print(Panel(
+                        f"[yellow]Weekly scan cadence:[/yellow] last scan was "
+                        f"[bold]{days_ago} day(s) ago[/bold] "
+                        f"(on {last.strftime('%Y-%m-%d')}).\n\n"
+                        "With [bold]max_concurrent_positions = "
+                        f"{DEFAULT_CONFIG.get('max_concurrent_positions', '?')}[/bold], "
+                        "most daily scans find no actionable candidates.\n"
+                        "Proceeding anyway — but consider waiting for the weekly window.",
+                        title="Weekly Cadence Reminder",
+                        border_style="yellow",
+                        padding=(1, 2),
+                    ))
+    except Exception:
+        pass  # best-effort
+
+
+def _record_scan_timestamp() -> None:
+    """Persist the current datetime as the last scan timestamp."""
+    try:
+        import json as _json, datetime as _dt
+        _LAST_SCAN_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _LAST_SCAN_FILE.write_text(
+            _json.dumps({"last_scan": _dt.datetime.now().isoformat()}, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass  # best-effort
+
+
 def _run_scan(
     universe: str,
     top: int,
@@ -1304,6 +1435,96 @@ def _run_scan(
     if universe not in valid:
         console.print(f"[red]Unknown universe '{universe}'. Valid: {', '.join(valid)}[/red]")
         raise typer.Exit(code=1)
+
+    # ── 1.5 Phase 8: small-account first-run framing ─────────────────────
+    _show_small_account_framing()
+
+    # ── 1.6 Phase 8: LLM budget check ────────────────────────────────────
+    _check_llm_budget()
+
+    # ── 1.7 Phase 8: scan cadence enforcement ────────────────────────────
+    _enforce_scan_cadence()
+
+    # ── 1.8 Scan-gate: block scan when portfolio is fully invested ────────
+    # Rule: if open_risk >= max_open_risk_pct OR position slots are full,
+    # there is no capacity for new positions.
+    # Also warn (without blocking) when open positions haven't been reviewed
+    # today, so the user doesn't neglect management while hunting new trades.
+    try:
+        from tradingagents.portfolio.store import PositionStore as _PositionStore
+        _gate_store = _PositionStore()
+        _account_equity = DEFAULT_CONFIG.get("account_equity_inr", 1_000_000)
+        _max_open_risk = DEFAULT_CONFIG.get("max_open_risk_pct", 6.0)
+        _max_concurrent = DEFAULT_CONFIG.get("max_concurrent_positions")
+        _open_risk_pct = _gate_store.get_open_risk_pct(_account_equity)
+        _open_positions = _gate_store.list_positions(status="OPEN")
+        _at_slot_limit = _gate_store.at_position_limit(_max_concurrent)
+
+        if _open_risk_pct >= _max_open_risk:
+            console.print(Panel(
+                f"[bold red]Fully invested — scan blocked.[/bold red]\n\n"
+                f"Open risk [bold]{_open_risk_pct:.1f}%[/bold] has reached the cap of "
+                f"[bold]{_max_open_risk:.1f}%[/bold]. "
+                f"No capacity for new positions.\n\n"
+                f"[bold]Next steps:[/bold]\n"
+                f"  1. Review open positions:  "
+                f"[cyan]python -m cli.main positions review --all[/cyan]\n"
+                f"  2. Close finished trades:  "
+                f"[cyan]python -m cli.main positions close <ID>[/cyan]\n"
+                f"  3. Re-run scan once risk capacity is freed.",
+                title="Scan Gate — Fully Invested",
+                border_style="red",
+                padding=(1, 2),
+            ))
+            raise typer.Exit(code=0)
+
+        if _at_slot_limit and _max_concurrent is not None:
+            console.print(Panel(
+                f"[bold red]Position slots full — scan blocked.[/bold red]\n\n"
+                f"You have [bold]{len(_open_positions)}[/bold] open position(s), "
+                f"which equals the [bold]max_concurrent_positions = {_max_concurrent}[/bold] cap.\n\n"
+                f"[bold]Next steps:[/bold]\n"
+                f"  1. Review open positions:  "
+                f"[cyan]python -m cli.main positions review --all[/cyan]\n"
+                f"  2. Close finished trades:  "
+                f"[cyan]python -m cli.main positions close <ID>[/cyan]\n"
+                f"  3. Re-run scan once a slot is freed.",
+                title="Scan Gate — Position Slots Full",
+                border_style="red",
+                padding=(1, 2),
+            ))
+            raise typer.Exit(code=0)
+
+        if _open_positions:
+            today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+            unreviewed = [
+                p for p in _open_positions
+                if (p.get("last_review_date") or "")[:10] != today_str
+            ]
+            if unreviewed:
+                _ureview_tickers = ", ".join(p.get("ticker", "?") for p in unreviewed)
+                console.print(Panel(
+                    f"[yellow]Reminder:[/yellow] {len(unreviewed)} open position(s) not reviewed today: "
+                    f"[bold]{_ureview_tickers}[/bold]\n"
+                    f"Consider running [cyan]python -m cli.main positions review --all[/cyan] "
+                    f"before or after this scan.",
+                    title="Review Reminder",
+                    border_style="yellow",
+                ))
+            _capacity_remaining = _max_open_risk - _open_risk_pct
+            _slot_info = (
+                f" | slots {len(_open_positions)}/{_max_concurrent}"
+                if _max_concurrent is not None else ""
+            )
+            console.print(
+                f"[dim]Portfolio: {len(_open_positions)} open position(s){_slot_info} | "
+                f"open risk {_open_risk_pct:.1f}% / {_max_open_risk:.1f}% cap | "
+                f"{_capacity_remaining:.1f}% capacity remaining[/dim]"
+            )
+    except typer.Exit:
+        raise
+    except Exception:
+        pass  # best-effort — never block a scan because the store is unavailable
 
     # ── 2. Quantitative screen ────────────────────────────────────────────
     universe_label = "DYNAMIC (NSE EQ-series)" if universe == "dynamic" else universe.upper()
@@ -1424,14 +1645,16 @@ def _run_scan(
         )
     console.print(picks_table)
 
-    # ── 7. Optional full pipeline run ────────────────────────────────────
+    # ── 7. Record scan timestamp (cadence enforcement, Phase 8) ──────────
+    _record_scan_timestamp()
+
+    # ── 8. Optional full pipeline run ────────────────────────────────────
     if not run_analysis_flag:
         console.print(
             "\n[dim]Tip: add --run-analysis to pipe each pick through the full analysis pipeline.[/dim]"
         )
         return
 
-    # Scan-gate check: warn if open risk is saturated (best-effort)
     console.print()
     console.print(Rule("Running Full Analysis on Each Pick", style="bold yellow"))
 
@@ -1624,6 +1847,467 @@ def universe(
     else:
         console.print(f"[red]Unknown action '{action}'. Use 'show' or 'refresh'.[/red]")
         raise typer.Exit(code=1)
+
+
+@app.command()
+def routine(
+    run: bool = typer.Option(
+        False,
+        "--run",
+        help="Automatically run the appropriate command for the current time of day.",
+    ),
+):
+    """Show the recommended operating cadence and your current portfolio status.
+
+    Detects the current IST time and tells you exactly what to do:
+
+    \\b
+    CADENCE TABLE
+    ─────────────────────────────────────────────────────────────────────────
+    Evening (after 15:30 IST)  scan --top N [--run-analysis]   ~20 min
+    Evening (after fills)      positions add / update            2 min
+    Morning (before 09:15 IST) positions review --all            ~5 min
+    Weekly                     positions close <finished trades>  5 min
+    Intraday                   nothing (swing system)             —
+    Holidays / weekends        nothing (no new data)              —
+    ─────────────────────────────────────────────────────────────────────────
+
+    Examples:
+        python -m cli.main routine          # show status + guidance
+        python -m cli.main routine --run    # run the right command automatically
+    """
+    from tradingagents.dataflows.india.market_calendar import market_status, is_trading_day
+
+    # ── 1. Cadence table ─────────────────────────────────────────────────
+    cadence_tbl = Table(
+        title="Operating Cadence — Swing Trading (India)",
+        box=box.SIMPLE_HEAD,
+        header_style="bold magenta",
+        show_footer=False,
+    )
+    cadence_tbl.add_column("When (IST)", style="cyan", width=28)
+    cadence_tbl.add_column("Command", style="green", width=38)
+    cadence_tbl.add_column("Purpose", width=34)
+    cadence_tbl.add_column("Time", width=8, justify="right")
+
+    cadence_rows = [
+        ("Evening — after 15:30 close",   "scan [--top N] [--run-analysis]", "New signals; EOD data complete", "~20 min"),
+        ("Evening — after fills",          "positions add / update",          "Keep store accurate",            "2 min"),
+        ("Morning — before 09:15 open",    "positions review --all",          "One-line verdict per position",  "~5 min"),
+        ("Weekly",                         "positions close <finished>",      "Feeds realized R → reflection",  "5 min"),
+        ("Intraday",                       "(nothing)",                       "Swing system; major news only",  "—"),
+        ("Holidays / weekends",            "(nothing)",                       "No new data",                    "—"),
+    ]
+    for when, cmd, purpose, t in cadence_rows:
+        cadence_tbl.add_row(when, cmd, purpose, t)
+
+    console.print()
+    console.print(cadence_tbl)
+
+    # ── 2. Current IST time & market status ──────────────────────────────
+    try:
+        status = market_status()
+    except Exception:
+        status = {}
+
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+
+    try:
+        if status.get("timezone"):
+            import pytz as _pytz
+            _ist = _pytz.timezone("Asia/Kolkata")
+            now_ist = _dt.now(_ist)
+        else:
+            raise ImportError
+    except (ImportError, Exception):
+        now_ist = _dt.now(_tz.utc) + _td(hours=5, minutes=30)
+
+    time_str = now_ist.strftime("%H:%M IST, %A %d %b %Y")
+    is_td = status.get("is_trading_day", False)
+    is_open = status.get("is_market_open", False)
+
+    h, m = now_ist.hour, now_ist.minute
+    pre_open  = is_td and (h, m) < (9, 15)
+    post_close = is_td and (h, m) >= (15, 30)
+    intraday   = is_td and not pre_open and not post_close
+    off_day    = not is_td
+
+    status_color = "green" if is_open else ("yellow" if is_td else "dim")
+    market_phase = (
+        "OPEN" if is_open
+        else ("Pre-open" if pre_open
+              else ("Post-close" if post_close
+                    else ("Holiday/weekend" if off_day else "Closed")))
+    )
+
+    # ── 3. Portfolio status ───────────────────────────────────────────────
+    open_count = 0
+    open_risk_pct = 0.0
+    unreviewed_tickers: list[str] = []
+    max_open_risk = DEFAULT_CONFIG.get("max_open_risk_pct", 6.0)
+    account_equity = DEFAULT_CONFIG.get("account_equity_inr", 1_000_000)
+
+    try:
+        from tradingagents.portfolio.store import PositionStore as _PS
+        _ps = _PS()
+        _open_pos = _ps.list_positions(status="OPEN")
+        open_count = len(_open_pos)
+        open_risk_pct = _ps.get_open_risk_pct(account_equity)
+        today_str = now_ist.strftime("%Y-%m-%d")
+        unreviewed_tickers = [
+            p.get("ticker", "?") for p in _open_pos
+            if (p.get("last_review_date") or "")[:10] != today_str
+        ]
+    except Exception:
+        pass
+
+    risk_color = "red" if open_risk_pct >= max_open_risk else ("yellow" if open_risk_pct > max_open_risk * 0.6 else "green")
+    capacity_pct = max(0.0, max_open_risk - open_risk_pct)
+
+    status_panel_lines = [
+        f"[bold]Current time:[/bold]     [{status_color}]{time_str}[/{status_color}]",
+        f"[bold]Market phase:[/bold]     [{status_color}]{market_phase}[/{status_color}]",
+        f"[bold]Open positions:[/bold]   {open_count}",
+        f"[bold]Open risk:[/bold]        [{risk_color}]{open_risk_pct:.1f}%[/{risk_color}] / {max_open_risk:.1f}% cap  "
+        f"({capacity_pct:.1f}% capacity remaining)",
+    ]
+    if unreviewed_tickers:
+        status_panel_lines.append(
+            f"[bold yellow]Not reviewed today:[/bold yellow] {', '.join(unreviewed_tickers)}"
+        )
+
+    console.print(Panel(
+        "\n".join(status_panel_lines),
+        title="Portfolio & Market Status",
+        border_style="cyan",
+        padding=(1, 2),
+    ))
+
+    # ── 4. Time-contextual guidance ───────────────────────────────────────
+    if off_day:
+        guidance_title = "Today — Holiday / Weekend"
+        guidance_color = "dim"
+        guidance = (
+            "No new market data today. The NSE is closed.\n\n"
+            "Nothing to do. Come back on the next trading day."
+        )
+        run_cmd = None
+
+    elif intraday:
+        guidance_title = "Market Is Open — Intraday"
+        guidance_color = "yellow"
+        guidance = (
+            "The market is currently open (09:15–15:30 IST).\n\n"
+            "Swing trading system: [bold]nothing to do intraday[/bold] unless a major event occurred\n"
+            "(results announcement, SEBI action, sector shock).\n\n"
+        )
+        if unreviewed_tickers:
+            guidance += (
+                f"You have unreviewed positions: [bold]{', '.join(unreviewed_tickers)}[/bold]\n"
+                "If a major news event hit one of them, run:\n"
+                f"  [cyan]python -m cli.main positions review TICKER[/cyan]"
+            )
+        else:
+            guidance += "All open positions are reviewed. Sit tight."
+        run_cmd = None
+
+    elif pre_open:
+        guidance_title = "Morning Routine — Before Open (09:15 IST)"
+        guidance_color = "green"
+        if open_count == 0:
+            guidance = (
+                "No open positions. Nothing to review.\n\n"
+                "If you plan to trade today, wait for EOD data after 15:30 IST\n"
+                "and run [cyan]scan[/cyan] this evening."
+            )
+            run_cmd = None
+        else:
+            guidance = (
+                f"You have {open_count} open position(s). [bold]Run your morning review[/bold]\n"
+                "to get a one-line verdict (HOLD / RAISE_SL / EXIT_PARTIAL / EXIT_FULL)\n"
+                "for each position before the market opens:\n\n"
+                "  [cyan]python -m cli.main positions review --all[/cyan]\n\n"
+            )
+            if unreviewed_tickers:
+                guidance += f"Not reviewed today: [bold]{', '.join(unreviewed_tickers)}[/bold]"
+            run_cmd = ["positions", "review", "--all"]
+
+    else:  # post_close
+        guidance_title = "Evening Routine — After Close (15:30 IST)"
+        guidance_color = "green"
+        if open_risk_pct >= max_open_risk:
+            guidance = (
+                f"[bold red]Fully invested[/bold red] — open risk {open_risk_pct:.1f}% has reached the "
+                f"cap of {max_open_risk:.1f}%.\n\n"
+                "No scan needed. Focus on managing existing positions:\n"
+                "  [cyan]python -m cli.main positions review --all[/cyan]"
+            )
+            run_cmd = None
+        else:
+            guidance = (
+                f"EOD data is now complete (FII/DII flows, prices, deals).\n"
+                f"Risk capacity: [bold]{capacity_pct:.1f}%[/bold] available.\n\n"
+                "[bold]Step 1:[/bold] Scan for new signals:\n"
+                "  [cyan]python -m cli.main scan --top 5[/cyan]\n\n"
+                "[bold]Step 2:[/bold] After fills, log any new positions:\n"
+                "  [cyan]python -m cli.main positions add[/cyan]\n\n"
+            )
+            if open_count > 0 and unreviewed_tickers:
+                guidance += (
+                    f"[bold]Also:[/bold] {len(unreviewed_tickers)} position(s) not reviewed today: "
+                    f"[bold]{', '.join(unreviewed_tickers)}[/bold]\n"
+                    "  [cyan]python -m cli.main positions review --all[/cyan]"
+                )
+            run_cmd = ["scan", "--top", "5"]
+
+    console.print(Panel(
+        guidance,
+        title=guidance_title,
+        border_style=guidance_color,
+        padding=(1, 2),
+    ))
+
+    # ── 5. Key notes ──────────────────────────────────────────────────────
+    notes_tbl = Table(
+        title="Key Rules (baked in, not optional)",
+        box=box.SIMPLE_HEAD,
+        header_style="bold red",
+        show_footer=False,
+    )
+    notes_tbl.add_column("Rule", style="bold", width=22)
+    notes_tbl.add_column("Detail", width=66)
+    notes_tbl.add_row(
+        "Scan gating",
+        f"scan is blocked when open risk ≥ {max_open_risk:.0f}% — fully invested means review only.",
+    )
+    notes_tbl.add_row(
+        "SL tighten-only",
+        "Stop-losses can only move in the profit direction — never widen.",
+    )
+    notes_tbl.add_row(
+        "Reviews mandatory",
+        "Morning review is mandatory whenever a position is open.",
+    )
+    notes_tbl.add_row(
+        "Intraday discipline",
+        "Swing system — no intraday noise unless a confirmed major event hits.",
+    )
+    notes_tbl.add_row(
+        "Weekly close",
+        "Close finished trades weekly to feed realized R into the reflection layer.",
+    )
+    console.print(notes_tbl)
+
+    # ── 6. Optional auto-run ──────────────────────────────────────────────
+    if run and run_cmd:
+        console.print(f"\n[bold cyan]Auto-running:[/bold cyan] python -m cli.main {' '.join(run_cmd)}\n")
+        app(run_cmd, standalone_mode=False)
+    elif run and run_cmd is None:
+        console.print("[dim]--run: nothing to run automatically at this time.[/dim]")
+
+
+@app.command()
+def profile(
+    action: str = typer.Argument(
+        "show",
+        help="Action: 'show' to display effective config, 'set' to persist a profile, 'budget' to show LLM spend.",
+    ),
+    value: Optional[str] = typer.Argument(
+        None,
+        help="For 'set': profile name ('small' or 'standard').",
+    ),
+):
+    """Manage the account profile and view Phase 8 settings.
+
+    Examples:
+        python -m cli.main profile             # show effective config
+        python -m cli.main profile set small   # persist small-account profile
+        python -m cli.main profile set standard
+        python -m cli.main profile budget      # show monthly LLM spend history
+    """
+    import json as _json
+    from tradingagents.default_config import _ACCOUNT_PROFILES
+
+    if action == "budget":
+        try:
+            from tradingagents.budget.spend_tracker import SpendTracker
+            tracker = SpendTracker()
+            history = tracker.get_all_months()
+            budget = DEFAULT_CONFIG.get("monthly_llm_budget_inr")
+
+            spend_tbl = Table(
+                title="Monthly LLM Spend (estimated INR)",
+                box=box.SIMPLE_HEAD,
+                header_style="bold magenta",
+            )
+            spend_tbl.add_column("Month", width=10)
+            spend_tbl.add_column("Spend ₹", width=10, justify="right")
+            if budget:
+                spend_tbl.add_column("Budget ₹", width=10, justify="right")
+                spend_tbl.add_column("% Used", width=8, justify="right")
+
+            for month in sorted(history.keys(), reverse=True)[:6]:
+                spend = history[month]
+                if budget:
+                    pct = spend / float(budget) * 100
+                    pct_color = "red" if pct >= 100 else ("yellow" if pct >= 80 else "green")
+                    spend_tbl.add_row(
+                        month,
+                        f"₹{spend:.0f}",
+                        f"₹{budget:.0f}",
+                        f"[{pct_color}]{pct:.0f}%[/{pct_color}]",
+                    )
+                else:
+                    spend_tbl.add_row(month, f"₹{spend:.0f}")
+
+            if not history:
+                console.print("[yellow]No LLM spend recorded yet.[/yellow]")
+            else:
+                console.print(spend_tbl)
+
+            if budget:
+                status = tracker.check_budget(float(budget))
+                color = "red" if status["over_budget"] else ("yellow" if status["warning"] else "green")
+                console.print(f"\n[{color}]{status['message']}[/{color}]")
+            else:
+                console.print(
+                    "\n[dim]No monthly_llm_budget_inr configured. "
+                    "Set via TRADINGAGENTS_MONTHLY_LLM_BUDGET_INR or "
+                    "'profile set small'.[/dim]"
+                )
+        except Exception as exc:
+            console.print(f"[red]Could not read spend tracker: {exc}[/red]")
+        return
+
+    if action == "set":
+        if value not in ("small", "standard"):
+            console.print(f"[red]Unknown profile '{value}'. Use 'small' or 'standard'.[/red]")
+            raise typer.Exit(code=1)
+        _PROFILE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _PROFILE_FILE.write_text(
+            _json.dumps({"account_profile": value}, indent=2), encoding="utf-8"
+        )
+        # Remove the small-account welcome flag so it fires again on next run
+        if _WELCOME_FLAG.exists():
+            _WELCOME_FLAG.unlink()
+        console.print(f"[green]✓ Account profile set to '[bold]{value}[/bold]'.[/green]")
+        console.print(
+            f"[dim]Saved to {_PROFILE_FILE}. "
+            "Takes effect on next CLI run. Env vars always override saved profile.[/dim]"
+        )
+        if value == "small":
+            preset = _ACCOUNT_PROFILES.get("small", {})
+            preset_tbl = Table(box=box.SIMPLE_HEAD, header_style="bold cyan", show_footer=False)
+            preset_tbl.add_column("Setting", width=28)
+            preset_tbl.add_column("Value", width=20)
+            for k, v in preset.items():
+                preset_tbl.add_row(k, str(v))
+            console.print("\n[bold]Small-account preset values that will apply:[/bold]")
+            console.print(preset_tbl)
+        return
+
+    # action == "show" (default)
+    acct_profile = DEFAULT_CONFIG.get("account_profile", "standard")
+    pipeline = DEFAULT_CONFIG.get("pipeline", "full")
+    equity = DEFAULT_CONFIG.get("account_equity_inr", 1_000_000)
+    budget = DEFAULT_CONFIG.get("monthly_llm_budget_inr")
+    cadence = DEFAULT_CONFIG.get("scan_cadence", "daily")
+    max_conc = DEFAULT_CONFIG.get("max_concurrent_positions")
+    max_pos_pct = DEFAULT_CONFIG.get("max_position_pct", 15.0)
+    max_open_risk = DEFAULT_CONFIG.get("max_open_risk_pct", 6.0)
+    risk_pct = DEFAULT_CONFIG.get("risk_pct_per_trade", 1.0)
+    max_price = DEFAULT_CONFIG.get("max_stock_price")
+
+    saved = {}
+    if _PROFILE_FILE.exists():
+        try:
+            saved = _json.loads(_PROFILE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    profile_color = "yellow" if acct_profile == "small" else "green"
+    pipeline_color = "yellow" if pipeline == "light" else "cyan"
+
+    settings_tbl = Table(
+        title=f"Effective Account Profile — [bold {profile_color}]{acct_profile}[/bold {profile_color}]",
+        box=box.SIMPLE_HEAD,
+        header_style="bold magenta",
+        show_footer=False,
+    )
+    settings_tbl.add_column("Setting", width=30, style="cyan")
+    settings_tbl.add_column("Value", width=20)
+    settings_tbl.add_column("Source", width=16, style="dim")
+
+    saved_profile_name = saved.get("account_profile")
+    env_profile = os.environ.get("TRADINGAGENTS_ACCOUNT_PROFILE")
+
+    def _src(key: str) -> str:
+        env_map = {
+            "account_profile": "TRADINGAGENTS_ACCOUNT_PROFILE",
+            "pipeline": "TRADINGAGENTS_PIPELINE",
+            "scan_cadence": "TRADINGAGENTS_SCAN_CADENCE",
+            "monthly_llm_budget_inr": "TRADINGAGENTS_MONTHLY_LLM_BUDGET_INR",
+            "max_concurrent_positions": "TRADINGAGENTS_MAX_CONCURRENT_POSITIONS",
+            "account_equity_inr": "TRADINGAGENTS_ACCOUNT_EQUITY_INR",
+        }
+        if env_map.get(key) and os.environ.get(env_map[key]):
+            return "env var"
+        if key in saved:
+            return "profile.json"
+        preset = _ACCOUNT_PROFILES.get(acct_profile, {})
+        if key in preset:
+            return f"preset:{acct_profile}"
+        return "default"
+
+    rows = [
+        ("account_profile", acct_profile),
+        ("pipeline", f"[{pipeline_color}]{pipeline}[/{pipeline_color}]"),
+        ("account_equity_inr", f"₹{equity:,.0f}"),
+        ("risk_pct_per_trade", f"{risk_pct:.1f}%"),
+        ("max_open_risk_pct", f"{max_open_risk:.1f}%"),
+        ("max_position_pct", f"{max_pos_pct:.1f}%"),
+        ("max_concurrent_positions", str(max_conc) if max_conc else "unlimited"),
+        ("max_stock_price", f"₹{max_price:,.0f}" if max_price else "no cap"),
+        ("scan_cadence", cadence),
+        ("monthly_llm_budget_inr", f"₹{budget:.0f}" if budget else "no cap"),
+    ]
+    for key, display_val in rows:
+        settings_tbl.add_row(key, display_val, _src(key))
+
+    console.print(settings_tbl)
+
+    if saved_profile_name:
+        console.print(
+            f"\n[dim]Saved profile: {saved_profile_name} "
+            f"(from {_PROFILE_FILE})[/dim]"
+        )
+    if env_profile:
+        console.print(f"[dim]Env override: TRADINGAGENTS_ACCOUNT_PROFILE={env_profile}[/dim]")
+
+    if pipeline == "light":
+        console.print(
+            "\n[yellow]Light pipeline active:[/yellow] "
+            "Market Analyst → Trader → Signal Validator → Portfolio Manager\n"
+            "[dim](Bull/Bear debate and risk debate are skipped)[/dim]"
+        )
+
+    budget_val = DEFAULT_CONFIG.get("monthly_llm_budget_inr")
+    if budget_val:
+        try:
+            from tradingagents.budget.spend_tracker import SpendTracker
+            status = SpendTracker().check_budget(float(budget_val))
+            color = "red" if status["over_budget"] else ("yellow" if status["warning"] else "green")
+            console.print(f"\n[{color}]{status['message']}[/{color}]")
+            console.print("[dim]Run 'profile budget' for full monthly history.[/dim]")
+        except Exception:
+            pass
+
+    console.print(
+        "\n[dim]To change profile: "
+        "python -m cli.main profile set small|standard\n"
+        "Env vars always override saved profile. "
+        "See UPGRADE_PLAN.md Phase 8 for full details.[/dim]"
+    )
 
 
 @app.command()

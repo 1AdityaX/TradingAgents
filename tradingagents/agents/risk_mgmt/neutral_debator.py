@@ -21,20 +21,46 @@ def create_neutral_debator(llm):
 
         trader_decision = state["trader_investment_plan"]
 
-        prompt = f"""As the Neutral Risk Analyst, your role is to provide a balanced perspective, weighing both the potential benefits and risks of the trader's decision or plan. You prioritize a well-rounded approach, evaluating the upsides and downsides while factoring in broader market trends, potential economic shifts, and diversification strategies.Here is the trader's decision:
+        prompt = f"""You are the Neutral Risk Analyst. Your specific job in this one-round debate is to build a **scenario tree** for the proposed trade and assign rough probabilities to each branch. This gives the Portfolio Manager a probability-weighted view rather than an optimism vs. pessimism binary.
 
+**SCENARIO TREE — construct and fill in each branch:**
+
+**Base case (most likely — state probability %):**
+- What needs to happen for the trade to work as designed (entry fills, thesis holds, targets reached)?
+- Key assumption: (e.g., "Nifty stays above 200-SMA, no negative news catalyst")
+- Expected outcome: (e.g., "TP1 hit in ~8 sessions, partial exit; trail SL to breakeven")
+- Estimated probability: X%
+
+**Bull case (better than expected — state probability %):**
+- What accelerates the move? (e.g., "Positive quarterly result, sector rotation inflow")
+- Expected outcome: (e.g., "Both TP1 and TP2 hit within 12 sessions")
+- Estimated probability: X%
+
+**Bear case (trade fails — state probability %):**
+- What triggers the stop-loss? (e.g., "Broader market correction, stock-specific bad news")
+- Expected outcome: (e.g., "SL hit at ₹2,778, loss = 1R")
+- Estimated probability: X%
+
+**Tail risk (low probability, high impact — state probability %):**
+- What is the worst realistic scenario? (e.g., "Gap down on results / circuit lock / systemic market shock")
+- Expected outcome: (e.g., "Exit at open prices, loss could be 2–3R")
+- Estimated probability: X%
+
+**Synthesis**: Given these probabilities, does the expected value of the trade justify execution? State your conclusion clearly and note which argument from the aggressive or conservative analyst you agree with and which you reject.
+
+Here is the trader's decision:
 {trader_decision}
-
-Your task is to challenge both the Aggressive and Conservative Analysts, pointing out where each perspective may be overly optimistic or overly cautious. Use insights from the following data sources to support a moderate, sustainable strategy to adjust the trader's decision:
 
 {instrument_context}
 Market Research Report: {market_research_report}
-Social Media Sentiment Report: {sentiment_report}
-Latest World Affairs Report: {news_report}
-Company Fundamentals Report: {fundamentals_report}
-Here is the current conversation history: {history} Here is the last response from the aggressive analyst: {current_aggressive_response} Here is the last response from the conservative analyst: {current_conservative_response}. If there are no responses from the other viewpoints yet, present your own argument based on the available data.
+Sentiment Report: {sentiment_report}
+News Report: {news_report}
+Fundamentals Report: {fundamentals_report}
+Debate history so far: {history}
+Aggressive analyst's last argument: {current_aggressive_response}
+Conservative analyst's last argument: {current_conservative_response}
 
-Engage actively by analyzing both sides critically, addressing weaknesses in the aggressive and conservative arguments to advocate for a more balanced approach. Challenge each of their points to illustrate why a moderate risk strategy might offer the best of both worlds, providing growth potential while safeguarding against extreme volatility. Focus on debating rather than simply presenting data, aiming to show that a balanced view can lead to the most reliable outcomes. Output conversationally as if you are speaking without any special formatting.""" + get_language_instruction()
+Probabilities must sum to 100%. Be specific: use actual prices and dates from the reports. Output conversationally without special formatting.""" + get_language_instruction()
 
         response = llm.invoke(prompt)
 
